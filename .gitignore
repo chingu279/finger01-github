@@ -1,0 +1,31 @@
+# ── 개인 건강 데이터는 절대 커밋하지 않는다 ──────────────────────
+# 전면 차단이 기본. 예외는 '.example.' 이 들어간 템플릿 파일뿐이다.
+# data/daily/ 등 하위 디렉터리는 `health init` 이 만들므로 .gitkeep 을 두지 않는다
+# (플레이스홀더를 통과시키려고 부정 규칙을 늘리면 실제 데이터가 새어나갈 틈이 생긴다).
+data/**
+!data/*.example.json
+exports/
+*.xml
+*.zip
+
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,28 @@
+{
+  "name": "홍길동",
+  "birth_year": 1988,
+  "sex": "male",
+  "height_cm": 175.0,
+  "timezone": "Asia/Seoul",
+
+  "goals": [
+    "10km를 55분 안에 완주",
+    "평일 7시간 이상 수면",
+    "허리 통증 없이 앉아서 일하기"
+  ],
+
+  "conditions": ["경도 고혈압", "알레르기성 비염"],
+  "medications": ["암로디핀 5mg 1일 1회 아침"],
+  "allergies": ["갑각류", "이부프로펜"],
+  "contraindications": [
+    "허리 굴곡 부하가 큰 동작(데드리프트 고중량) 회피",
+    "미세먼지 나쁨 시 야외 고강도 유산소 회피"
+  ],
+
+  "sleep_need_min": 450,
+  "resting_hr_known": 56,
+  "max_hr": null,
+
+  "clinician_note": "2026-06 진료: 혈압 목표 130/80 미만, 3개월 뒤 재평가",
+  "emergency_contact": "배우자 010-0000-0000"
+}
