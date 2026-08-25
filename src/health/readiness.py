@@ -154,8 +154,32 @@ def _attach_flags(
             f"7일 누적 수면부채 {r.sleep_debt_min / 60:.1f}시간 — 취침 30분 앞당기기 우선"
         )
 
-    for path in ("vitals.hrv_rmssd_ms", "sleep.total_min", "subjective.energy"):
+    _flag_missing(r, history, profile)
+
+
+# 결측 경보를 내기 전에 필요한 최소 관측 기간. 시작 첫 주에는
+# 모든 지표가 정의상 '절반 이상 결측'이라, 이때 경보를 내면 사용자는
+# 첫날부터 경보를 무시하는 법을 배운다. 그게 경보 피로의 시작이다.
+MISSING_MIN_HISTORY = 7
+MISSING_SEEN_THRESHOLD = 3
+
+
+def _flag_missing(r: Readiness, history: Sequence[DailyRecord], profile: Profile) -> None:
+    """수집이 '끊긴' 지표만 경보한다 — 애초에 수집한 적 없는 지표는 뺀다.
+
+    두 경우만 경보 대상이다:
+      · 사용자가 매일 기록하기로 정한 항목(profile.tracked())
+      · 과거에 잘 들어오던 지표(3회 이상 관측)가 최근 비어버린 경우
+    """
+    if len(history) < MISSING_MIN_HISTORY:
+        return
+
+    expected = set(profile.tracked())
+    for path, label, _, _ in bl.TRACKED:
+        seen = len(bl.series(history, path))
+        if path not in expected and seen < MISSING_SEEN_THRESHOLD:
+            continue                      # 수집한 적 없는 지표 — 경보 대상 아님
         if bl.missingness(history, path) > 0.5:
             r.flags.append(
-                f"데이터 결측: 최근 2주 '{bl.label_for(path)}' 절반 이상 비어있음 — 수집 경로 점검 필요"
+                f"데이터 결측: 최근 2주 '{label}' 절반 이상 비어있음 — 수집 경로 점검 필요"
             )

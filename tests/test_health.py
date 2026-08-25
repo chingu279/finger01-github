@@ -248,3 +248,107 @@ def test_unknown_field_is_rejected():
     r = make(1)
     with pytest.raises(KeyError):
         r.set_path("sleep.not_a_field", 1)
+
+
+# ── 결측 경보 (경보 피로 방지) ─────────────────────────────────
+
+def test_no_missing_flags_in_first_week():
+    """시작 첫 주에는 모든 지표가 정의상 결측이다. 여기서 경보를 내면
+    사용자는 첫날부터 경보를 무시하는 법을 배운다."""
+    hist = [make(i + 1, subjective__energy=3) for i in range(4)]
+    r = rd.compute(hist, make(6, subjective__energy=3), Profile())
+    assert not any("결측" in f for f in r.flags)
+
+
+def test_untracked_never_collected_metric_is_not_flagged():
+    """웨어러블이 없어 HRV를 한 번도 수집한 적 없다면 '결측'이 아니다."""
+    hist = [make(i + 1, subjective__energy=3, sleep__total_min=440) for i in range(14)]
+    p = Profile(tracking=["subjective.energy", "sleep.total_min"])
+    r = rd.compute(hist, make(20, subjective__energy=3, sleep__total_min=440), p)
+    assert not any("HRV" in f for f in r.flags)
+
+
+def test_broken_collection_path_is_flagged():
+    """잘 들어오던 지표가 끊기면 그건 반드시 알려야 한다."""
+    hist = [make(i + 1, vitals__hrv_rmssd_ms=50, subjective__energy=3) for i in range(10)]
+    hist += [make(i + 11, subjective__energy=3) for i in range(12)]   # HRV 12일간 두절
+    r = rd.compute(hist, make(25, subjective__energy=3), Profile())
+    assert any("HRV" in f and "결측" in f for f in r.flags)
+
+
+def test_tracked_metric_is_flagged_even_if_never_arrived():
+    """매일 기록하기로 해놓고 안 하는 항목은 경보 대상이다."""
+    hist = [make(i + 1, subjective__energy=3) for i in range(14)]
+    p = Profile(tracking=["subjective.energy", "vitals.resting_hr"])
+    r = rd.compute(hist, make(20, subjective__energy=3), p)
+    assert any("안정시 심박" in f for f in r.flags)
+
+
+# ── 체크인 입력 처리 ───────────────────────────────────────────
+
+def test_sleep_accepts_hours_or_minutes():
+    from health.checkin import _duration
+
+    assert _duration("7.5") == 450.0      # 사람은 시간으로 생각한다
+    assert _duration("450") == 450.0      # 웨어러블은 분으로 준다
+    assert _duration("7h") == 420.0
+
+
+def test_profile_tracking_defaults_to_five_items():
+    from health.checkin import DEFAULT_TRACKING, PROMPTS
+
+    assert len(DEFAULT_TRACKING) == 5     # 10개를 고르면 2주 안에 그만둔다
+    assert all(path in PROMPTS for path in DEFAULT_TRACKING)
+
+
+def test_every_prompt_path_exists_on_the_record():
+    """프롬프트 경로가 스키마와 어긋나면 체크인이 런타임에 죽는다."""
+    from health.checkin import PROMPTS
+
+    rec = make(1)
+    for path in PROMPTS:
+        rec.set_path(path, 1)             # KeyError 가 나면 실패
+
+
+def test_every_prompt_has_a_range_or_is_free_text():
+    """숫자 항목에 범위가 없으면 오타 하나가 베이스라인을 밀어버린다."""
+    from health.checkin import PROMPTS, RANGES
+
+    for path, p in PROMPTS.items():
+        if p.kind in ("number", "duration", "nrs"):
+            assert path in RANGES, f"{path} 에 생리학적 범위가 없습니다"
+
+
+# ── Phase 0 게이트 ─────────────────────────────────────────────
+
+def test_streak_counts_consecutive_days():
+    from health.cli import _streak
+
+    dates = ["2026-08-19", "2026-08-20", "2026-08-21", "2026-08-22",
+             "2026-08-23", "2026-08-24", "2026-08-25"]
+    n, done = _streak(dates, "2026-08-25")
+    assert (n, done) == (7, True)
+
+
+def test_streak_survives_an_unfinished_today():
+    """아침 9시에 아직 체크인을 안 했다고 연속 기록이 끊긴 것으로 세면
+    사람은 좌절하고 그만둔다."""
+    from health.cli import _streak
+
+    dates = ["2026-08-23", "2026-08-24"]
+    n, done = _streak(dates, "2026-08-25")
+    assert n == 2 and done is False
+
+
+def test_streak_breaks_on_a_real_gap():
+    from health.cli import _streak
+
+    dates = ["2026-08-19", "2026-08-20", "2026-08-24", "2026-08-25"]
+    n, _ = _streak(dates, "2026-08-25")
+    assert n == 2
+
+
+def test_streak_is_zero_with_no_records():
+    from health.cli import _streak
+
+    assert _streak([], "2026-08-25") == (0, False)

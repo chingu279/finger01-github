@@ -16,8 +16,9 @@ import argparse
 import json
 import math
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
+from . import checkin as ck
 from . import readiness as rd
 from . import report as rp
 from . import triage as tg
@@ -49,16 +50,99 @@ def _coerce(v: str):
     return v
 
 
+PROFILE_QUESTIONS: list[tuple[str, str, str]] = [
+    # (필드, 질문, 힌트)  — 순서가 곧 중요도다. 안전 경계부터 묻는다.
+    ("name",          "이름/호칭",              "브리핑에서 부를 이름"),
+    ("birth_year",    "태어난 해",              "예: 1988. 최대심박·참고범위 추정에 쓰입니다"),
+    ("sex",           "성별",                   "male / female / other (참고범위 판정용)"),
+    ("height_cm",     "키(cm)",                 ""),
+    ("conditions",    "기저질환",               "쉼표로 구분. 없으면 Enter"),
+    ("medications",   "복약 중인 약",           "이름+용량+빈도. 건강기능식품 포함. 없으면 Enter"),
+    ("allergies",     "알레르기",               "약물·음식. 없으면 Enter"),
+    ("contraindications", "피해야 할 운동/식이", "의사가 제한한 것, 부상 이력 등"),
+    ("goals",         "목표",                   "구체적일수록 좋습니다. 예: 평일 7시간 수면"),
+    ("emergency_contact", "비상연락처",         "응급 판정 시 안내에 쓰입니다"),
+    ("clinician_note", "주치의 지시사항",       "최근 진료에서 받은 목표·주의사항"),
+]
+
+LIST_FIELDS = {"conditions", "medications", "allergies", "contraindications", "goals"}
+
+
+def _fill_profile(p: Profile) -> Profile:
+    print("\n프로필을 채웁니다. 이 값들이 모든 조언의 안전 경계가 됩니다.")
+    print("모르거나 해당 없으면 Enter 로 건너뜁니다. (q = 중단)\n")
+    for field_name, question, hint in PROFILE_QUESTIONS:
+        cur = getattr(p, field_name)
+        shown = ", ".join(cur) if isinstance(cur, list) else cur
+        was = f"  [현재: {shown}]" if shown else ""
+        if hint:
+            print(f"  {hint}")
+        try:
+            raw = input(f"  {question}{was}\n  › ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n중단했습니다.")
+            raise ck.Aborted
+        print()
+        if not raw:
+            continue
+        if raw.lower() == "q":
+            raise ck.Aborted
+        if field_name in LIST_FIELDS:
+            setattr(p, field_name, [s.strip() for s in raw.split(",") if s.strip()])
+        elif field_name == "birth_year":
+            try:
+                p.birth_year = int(raw)
+            except ValueError:
+                print("    ↑ 숫자가 아니라 건너뜁니다")
+        elif field_name == "height_cm":
+            try:
+                p.height_cm = float(raw)
+            except ValueError:
+                print("    ↑ 숫자가 아니라 건너뜁니다")
+        else:
+            setattr(p, field_name, raw)
+
+    print("  매일 기록할 항목을 고릅니다. 기본 5개를 그대로 쓰려면 Enter.")
+    print(f"  기본: {', '.join(ck.DEFAULT_TRACKING)}")
+    print(f"  가능한 항목: {', '.join(sorted(ck.PROMPTS))}")
+    try:
+        raw = input("  › ").strip()
+    except (EOFError, KeyboardInterrupt):
+        raw = ""
+    if raw:
+        chosen = [s.strip() for s in raw.split(",") if s.strip() in ck.PROMPTS]
+        if len(chosen) > 6:
+            print(f"  ⚠ {len(chosen)}개를 고르셨습니다. 5개를 넘으면 2주 안에 기록이 끊깁니다.")
+        p.tracking = chosen
+
+    p.reviewed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    return p
+
+
 def cmd_init(args, store: Store) -> int:
-    p = store.load_profile()
-    if store.profile_path.exists() and not args.force:
-        print(f"프로필이 이미 있습니다: {store.profile_path} (덮어쓰려면 --force)")
+    exists = store.profile_path.exists()
+    if exists and not (args.force or args.interactive):
+        print(f"프로필이 이미 있습니다: {store.profile_path}")
+        print("내용을 채우려면: python -m health init --interactive")
         return 1
+
+    p = store.load_profile() if exists else Profile()
+    if args.interactive:
+        try:
+            p = _fill_profile(p)
+        except ck.Aborted:
+            print("저장하지 않고 종료합니다.")
+            return 130
+
     store.save_profile(p)
     store.daily_dir.mkdir(parents=True, exist_ok=True)
-    print(f"초기화 완료.\n프로필: {store.profile_path}")
-    print("→ 나이·기저질환·복약·금기·목표를 직접 채워 넣으세요. "
-          "이 값들이 모든 조언의 안전 경계가 됩니다.")
+    print(f"\n저장: {store.profile_path}")
+    if p.reviewed_at:
+        print(f"매일 기록할 항목 {len(p.tracked())}개: {', '.join(p.tracked())}")
+        print("\n다음: python -m health checkin")
+    else:
+        print("→ 나이·기저질환·복약·금기·목표를 채워야 합니다.")
+        print("   대화형으로: python -m health init --interactive")
     return 0
 
 
@@ -99,6 +183,127 @@ def cmd_log(args, store: Store) -> int:
     store.log_event("log", args.source or "cli", {"date": d, "fields": args.set or []})
     print(f"저장: {path}")
     return 0
+
+
+def cmd_checkin(args, store: Store) -> int:
+    d = args.date or _today()
+    profile = store.load_profile()
+    rec = store.load_or_new(d)
+
+    print(f"\n체크인 — {d}")
+    if not profile.reviewed_at:
+        print("⚠ 프로필이 아직 검토되지 않았습니다. 안전 경계 없이 조언이 나갑니다.")
+        print("  먼저: python -m health init --interactive\n")
+
+    try:
+        rec, seconds, filled = ck.run(rec, profile.tracked())
+    except ck.Aborted:
+        print("\n중단했습니다. 여기까지는 저장되지 않았습니다.")
+        return 130
+    except KeyboardInterrupt:
+        print("\n중단했습니다.")
+        return 130
+
+    rec.sources = sorted(set(rec.sources) | {"checkin"})
+    store.save(rec)
+    store.log_event("checkin", "cli", {"date": d, "seconds": seconds, "filled": filled})
+
+    print(f"\n저장 ({seconds:.0f}초, {filled}개 기록)")
+    if seconds > 90:
+        print("⚠ 90초를 넘었습니다. 항목을 줄이거나 자동 수집으로 옮기세요 "
+              "— 이 속도로는 2주 안에 기록이 끊깁니다.")
+
+    # 체크인 직후 안전 판정을 보여준다. 자유 서술도 레드플래그 스캔 대상이다.
+    history = [r for r in store.history(end=d, days=29) if r.date != d]
+    res = tg.evaluate(history, rec, profile)
+    if res.findings:
+        print("\n" + res.render())
+    r = rd.compute(history, rec, profile)
+    print(f"\n{r.summary()}")
+    for f in r.flags:
+        print(f"  ⚑ {f}")
+    return int(res.severity)
+
+
+def _streak(dates: list[str], today: str) -> tuple[int, bool]:
+    """연속 기록일과 '오늘 기록 여부'.
+
+    아침 9시에 아직 체크인을 안 했다고 연속 기록이 끊긴 것으로 세면
+    사람은 좌절한다. 그래서 오늘이 비어 있으면 어제부터 센다.
+    """
+    have = set(dates)
+    done_today = today in have
+    cursor = date.fromisoformat(today)
+    if not done_today:
+        cursor -= timedelta(days=1)
+    n = 0
+    while cursor.isoformat() in have:
+        n += 1
+        cursor -= timedelta(days=1)
+    return n, done_today
+
+
+def cmd_status(args, store: Store) -> int:
+    """Phase 0 게이트 판정판. 통과 조건을 감이 아니라 숫자로 본다."""
+    today = args.date or _today()
+    profile = store.load_profile()
+    dates = store.all_dates()
+    streak, done_today = _streak(dates, today)
+
+    recent = [d for d in dates if d > (date.fromisoformat(today) - timedelta(days=14)).isoformat()]
+    coverage = len(recent) / 14
+
+    times = [e["seconds"] for e in store.events("checkin") if isinstance(e.get("seconds"), (int, float))]
+    median = sorted(times)[len(times) // 2] if times else None
+
+    tracked = profile.tracked()
+    checks: list[tuple[bool | None, str, str]] = [
+        (
+            bool(profile.reviewed_at),
+            "프로필 검토",
+            f"검토 {profile.reviewed_at[:10]}" if profile.reviewed_at
+            else "미검토 — python -m health init --interactive",
+        ),
+        (
+            len(tracked) <= 5,
+            f"측정 항목 {len(tracked)}개",
+            "5개 이하" if len(tracked) <= 5 else "5개를 넘으면 2주 안에 끊깁니다",
+        ),
+        (
+            streak >= 7,
+            f"연속 기록 {streak}일",
+            "7일 달성" if streak >= 7 else f"{7 - streak}일 남음",
+        ),
+        (
+            None if median is None else median <= 90,
+            "체크인 소요 시간",
+            "측정된 체크인 없음 — python -m health checkin"
+            if median is None else f"중앙값 {median:.0f}초 (기준 90초)",
+        ),
+    ]
+
+    print(f"\nPhase 0 게이트 — {today}")
+    print("─" * 52)
+    for ok, label, detail in checks:
+        mark = "…" if ok is None else ("✓" if ok else "✗")
+        print(f"  {mark} {label:<20} {detail}")
+    print("─" * 52)
+    print(f"  기록된 날 {len(dates)}일 · 최근 14일 기록률 {coverage * 100:.0f}%"
+          f" · 오늘 {'완료' if done_today else '미기록'}")
+
+    if profile.conditions or profile.medications:
+        print(f"  안전 경계: 기저질환 {len(profile.conditions)}건 · 복약 {len(profile.medications)}건")
+
+    passed = all(c[0] for c in checks)
+    print()
+    if passed:
+        print("  Phase 0 통과. 다음은 Phase 1 — 에이전트 4개(orchestrator, checkin,")
+        print("  risk-triage, vitals-analyst)를 붙이고 21일 데이터를 모읍니다. docs/02-roadmap.md")
+    else:
+        nxt = next((c for c in checks if not c[0]), None)
+        if nxt:
+            print(f"  다음 할 일: {nxt[1]} — {nxt[2]}")
+    return 0 if passed else 1
 
 
 def cmd_score(args, store: Store) -> int:
@@ -204,7 +409,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("init", help="프로필/디렉터리 초기화")
     s.add_argument("--force", action="store_true")
+    s.add_argument("-i", "--interactive", action="store_true", help="대화형으로 프로필 채우기")
     s.set_defaults(func=cmd_init)
+
+    s = sub.add_parser("checkin", help="대화형 일일 체크인 (Phase 0 의 기본 루프)")
+    s.add_argument("--date")
+    s.set_defaults(func=cmd_checkin)
+
+    s = sub.add_parser("status", help="Phase 0 게이트 판정판")
+    s.add_argument("--date")
+    s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("log", help="일별 레코드 기록/갱신")
     s.add_argument("--date")

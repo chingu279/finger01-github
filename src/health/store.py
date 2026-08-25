@@ -51,6 +51,18 @@ class Profile:
     clinician_note: str | None = None
     emergency_contact: str | None = None
 
+    # Phase 0 에서 정하는 값들
+    tracking: list[str] = field(default_factory=list)   # 매일 물을 항목 (비면 기본 세트)
+    reviewed_at: str | None = None                      # 프로필을 실제로 검토한 시각
+    #  왜 reviewed_at 이 필요한가: conditions=[] 는 "기저질환 없음"과
+    #  "아직 안 채움"을 구별하지 못한다. 게이트는 목록의 길이가 아니라
+    #  사람이 실제로 훑어봤는지를 봐야 한다.
+
+    def tracked(self) -> list[str]:
+        from .checkin import DEFAULT_TRACKING
+
+        return list(self.tracking) if self.tracking else list(DEFAULT_TRACKING)
+
     @property
     def age(self) -> int | None:
         if self.birth_year is None:

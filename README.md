@@ -34,10 +34,14 @@ git clone https://github.com/chingu279/finger01-github.git
 cd finger01-github
 export PYTHONPATH=src          # 또는: pip install -e .
 
-python -m health init          # data/profile.json 생성 → 직접 채운다
-python -m health seed --days 30  # (선택) 데모용 합성 데이터
-python -m health brief         # 오늘의 팩트시트
+python -m health init -i       # 프로필을 대화형으로 채운다 (5분, 한 번만)
+python -m health checkin       # 매일 이것 하나. 90초 안에 끝나야 한다
+python -m health status        # Phase 0 게이트 통과 여부
 ```
+
+`checkin` 은 프로필에서 정한 항목만, 아직 안 채워진 것만 묻는다.
+리커트 항목은 키 한 번. 생리학적 범위를 벗어난 값은 저장하지 않고 되묻는다.
+자유 서술 한 줄도 레드플래그 스캔 대상이라, 증상은 **본인 표현 그대로** 적으면 된다.
 
 그다음 Claude Code에서:
 ```
@@ -46,14 +50,29 @@ python -m health brief         # 오늘의 팩트시트
 /health-report        진료 전 요약 · 월간 리포트
 ```
 
-### 매일 쓰는 명령
+### 그 밖의 명령
 ```bash
-python -m health log --set subjective.energy=3 --set subjective.mood=4 \
-                     --set 'subjective.note=야근하고 늦게 잠'
 python -m health score          # 준비도 0~100 + 기여 요인
 python -m health triage         # 레드플래그 (종료코드 = 심각도 0~3)
 python -m health brief          # 에이전트에 먹일 일일 팩트시트
 python -m health weekly         # 주간 팩트시트
+python -m health seed --days 30 # 데모용 합성 데이터 (실제 값 아님)
+python -m health log --set vitals.weight_kg=70.2   # 단건 기록/보정
+```
+
+## 데이터는 어디에 사는가
+
+`data/` 는 **이 저장소를 클론한 로컬 머신**에만 있다. `.gitignore` 로 전부 제외되어
+커밋되지 않고, 원격 세션(Claude Code on the web 등)의 컨테이너는 회수되면 사라진다.
+**매일의 기록은 본인 기기에서 돌려야 한다.**
+
+`HEALTH_DATA_DIR` 로 위치를 옮길 수 있다 — 예를 들어 암호화된 볼륨 안으로:
+```bash
+export HEALTH_DATA_DIR=~/Vault/health-data
+```
+백업은 평문 클라우드 동기화 폴더가 아니라 암호화 아카이브로 한다:
+```bash
+tar czf - "$HEALTH_DATA_DIR" | age -p > health-$(date +%F).tar.gz.age
 ```
 
 ## 에이전트 14개
