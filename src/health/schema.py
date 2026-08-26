@@ -71,6 +71,19 @@ class Vitals:
     body_fat_pct: float | None = None
     blood_glucose_mgdl: float | None = None
 
+    # ── 부정맥 관련 (Apple Watch AFib History / ECG / 심박 알림) ──
+    #  심방세동이 있는 사람에게는 이 값들이 HRV·안정시심박보다 중요하다.
+    #  그리고 AF 중의 HRV 는 자율신경이 아니라 부정맥을 재는 값이라,
+    #  이 필드들이 없으면 준비도가 정반대로 나온다(readiness.hrv_usable 참고).
+    afib_burden_pct: float | None = None      # 그날 심방세동으로 보낸 시간 비율
+    irregular_rhythm_events: int | None = None  # 불규칙 심박 알림 횟수
+    ecg_afib: bool | None = None              # 그날 ECG 중 심방세동 판정이 있었는가
+    ecg_readings: int | None = None
+    high_hr_events: int | None = None         # 안정 시 고심박 알림
+    low_hr_events: int | None = None          # 서맥 알림 (맥박 조절 약물 복용 시 중요)
+    walking_hr_avg: float | None = None
+    vo2max: float | None = None
+
 
 @dataclass
 class Workout:

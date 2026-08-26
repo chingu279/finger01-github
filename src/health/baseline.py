@@ -28,6 +28,8 @@ TRACKED: list[tuple[str, str, int, float]] = [
     ("vitals.hrv_sdnn_ms", "HRV(SDNN)", +1, 5.0),
     ("vitals.resting_hr", "안정시 심박", -1, 1.5),
     ("vitals.spo2_pct", "산소포화도", +1, 0.5),
+    ("vitals.afib_burden_pct", "심방세동 부담", -1, 1.0),
+    ("vitals.walking_hr_avg", "보행 심박", -1, 2.0),
     ("vitals.body_temp_c", "체온", 0, 0.2),
     ("vitals.weight_kg", "체중", 0, 0.3),
     ("sleep.total_min", "총 수면", +1, 20.0),

@@ -57,7 +57,45 @@ _PATTERNS: dict[str, str] = {
     "anaphylaxis": r"아나필락시스|목.{0,3}(붓|조[이임])|전신.{0,3}두드러기|anaphylax",
     "seizure": r"경련|발작|seizure|convulsion",
     "severe_abdo": r"복통.{0,6}(심[하한]|극심)|극심.{0,4}복통|반발압통",
+    "head_injury": r"머리.{0,4}(부딪|찧|박|충격|다[쳤치])|두부.{0,3}(외상|손상)|넘어[져지].{0,10}머리|낙상|head (injury|trauma)|hit my head",
+    "palpitation": r"두근|심장.{0,4}(빨리|불규칙|뛰[는던])|맥박.{0,4}불규칙|부정맥|가슴.{0,4}벌렁|palpitation|irregular (heart|pulse)",
+    "bruising": r"멍이.{0,4}(잘|자주|많이)|쉽게.{0,3}멍|잇몸.{0,3}출혈|코피.{0,6}(자주|멈추지)|easy brui|nosebleed",
+    "myalgia": r"근육통.{0,10}(심|전신)|전신.{0,4}근육통|근육.{0,4}(약화|힘.{0,2}빠)|myalgia|muscle (pain|weakness)",
+    "dark_urine": r"소변.{0,6}(진[한하]|갈색|콜라|붉)|혈뇨|dark urine|tea.?colou?red",
+    "nsaid": r"이부프로펜|부루펜|나프록센|낙센|아스피린|디클로페낙|소염진통제|NSAID|ibuprofen|naproxen|diclofenac",
 }
+
+# 약물 성분·상품명 → 계열. 프로필의 medications 문자열에서 찾아낸다.
+#   왜 계열이 필요한가: "릭시아나 60mg" 이라는 문자열만으로는 규칙을 쓸 수 없다.
+#   항응고제를 먹는 사람에게 머리 외상은 무증상이어도 응급이고, 맥박 조절
+#   약물을 먹는 사람에게 서맥은 다른 의미를 갖는다.
+MED_CLASS_PATTERNS: dict[str, str] = {
+    "anticoagulant": r"릭시아나|에독사반|자렐토|리바록사반|엘리퀴스|아픽사반|프라닥사|다비가트란|와파린|쿠마딘|"
+                     r"edoxaban|rivaroxaban|apixaban|dabigatran|warfarin",
+    "antiplatelet": r"아스피린|플라빅스|클로피도그렐|브릴린타|티카그렐러|프라수그렐|"
+                    r"aspirin|clopidogrel|ticagrelor|prasugrel",
+    "antiarrhythmic": r"멀택|드로네다론|아미오다론|코다론|소탈롤|플레카이니드|프로파페논|리듬온|"
+                      r"dronedarone|amiodarone|sotalol|flecainide|propafenone",
+    "beta_blocker": r"콘코르|비소프롤롤|메토프롤롤|베타록|아테놀롤|카베딜롤|딜라트렌|프로프라놀롤|인데놀|"
+                    r"bisoprolol|metoprolol|atenolol|carvedilol|propranolol",
+    "rate_limiting_ccb": r"딜티아젬|헤르벤|베라파밀|이솝틴|diltiazem|verapamil",
+    "statin": r"크레스토|로수바스타틴|리피토|아토르바스타틴|심바스타틴|조코|피타바스타틴|리바로|"
+              r"rosuvastatin|atorvastatin|simvastatin|pitavastatin",
+    "insulin_or_sulfonylurea": r"인슐린|란투스|투제오|글리메피리드|아마릴|글리클라지드|디아미크롱|"
+                               r"insulin|glimepiride|gliclazide|glipizide",
+}
+
+
+def med_classes(profile: Profile) -> set[str]:
+    """프로필의 복약 목록에서 약물 계열을 추출한다."""
+    text = " ".join(profile.medications).lower()
+    found = {name for name, pattern in MED_CLASS_PATTERNS.items()
+             if re.search(pattern, text, re.I)}
+    if found & {"antiarrhythmic", "beta_blocker", "rate_limiting_ccb"}:
+        found.add("rate_control")      # 맥박을 낮추는 약을 먹고 있다
+    if found & {"anticoagulant", "antiplatelet"}:
+        found.add("bleeding_risk")
+    return found
 
 
 @dataclass
@@ -361,7 +399,141 @@ def _rule_profile(history, today, profile) -> list[Finding]:
     return out
 
 
-RULES: list[Callable] = [_rule_symptoms, _rule_vitals, _rule_deviation, _rule_profile]
+def _rule_medications(history, today, profile) -> list[Finding]:
+    """복약 계열이 바꾸는 판정들.
+
+    같은 증상도 무슨 약을 먹고 있느냐에 따라 긴급도가 달라진다.
+    이 규칙들은 **상향만** 한다 — 어떤 약을 먹는다고 위험을 낮추지 않는다.
+    """
+    out: list[Finding] = []
+    classes = med_classes(profile)
+    t = _text(today)
+    v = today.vitals
+
+    if "bleeding_risk" in classes:
+        if _has(t, "head_injury"):
+            out.append(Finding(
+                Severity.EMERGENCY, "anticoag_head_injury",
+                "항응고·항혈소판제 복용 중 머리 외상이 기록되었습니다",
+                f"지금 증상이 없어도 즉시 응급실. 두개내 출혈은 수 시간~수일 뒤에 "
+                f"나타날 수 있습니다. {HOTLINES['emergency']}",
+                ["복약 계열: 출혈 위험"],
+            ))
+        if _has(t, "bruising"):
+            out.append(Finding(
+                Severity.ROUTINE, "anticoag_bruising",
+                "항응고·항혈소판제 복용 중 멍·잇몸출혈·코피가 기록되었습니다",
+                "처방의에게 알리고 다음 진료 때 확인하세요. 임의로 약을 거르지 마세요",
+                ["복약 계열: 출혈 위험"],
+            ))
+        if _has(t, "nsaid"):
+            out.append(Finding(
+                Severity.ROUTINE, "anticoag_nsaid",
+                "항응고·항혈소판제와 소염진통제(NSAID)를 함께 쓰면 출혈 위험이 올라갑니다",
+                "복용 전 약사나 처방의에게 확인하세요", ["복약 계열: 출혈 위험"],
+            ))
+
+    if "rate_control" in classes:
+        hr = v.resting_hr
+        symptomatic = _has(t, "syncope") or _has(t, "dyspnea") or "어지" in t
+        if hr is not None and hr < 45:
+            out.append(Finding(
+                Severity.URGENT if symptomatic else Severity.ROUTINE,
+                "bradycardia_on_rate_control",
+                f"맥박 조절 약물 복용 중 안정시 심박 {hr:.0f}bpm",
+                "처방의 확인이 필요합니다. 어지럼·실신·호흡곤란이 동반되면 당일 진료. "
+                "임의로 약을 중단하지 마세요",
+                ["복약 계열: 맥박 조절"],
+            ))
+        if v.low_hr_events:
+            out.append(Finding(
+                Severity.ROUTINE, "low_hr_alerts",
+                f"저심박 알림 {v.low_hr_events}회 (맥박 조절 약물 복용 중)",
+                "알림 기록을 다음 진료 때 보여주세요", ["웨어러블 알림"],
+            ))
+
+    if "statin" in classes and _has(t, "myalgia"):
+        sev = Severity.URGENT if _has(t, "dark_urine") else Severity.ROUTINE
+        out.append(Finding(
+            sev, "statin_myopathy_watch",
+            "스타틴 복용 중 근육통" + (" + 짙은 소변" if _has(t, "dark_urine") else ""),
+            "근육 손상 여부 확인이 필요합니다. 짙은 소변이 동반되면 당일 진료. "
+            "임의 중단 말고 처방의와 상의하세요",
+            ["복약 계열: 스타틴"],
+        ))
+
+    return out
+
+
+def _rule_arrhythmia(history, today, profile) -> list[Finding]:
+    """부정맥 관련 신호. 웨어러블이 주는 값과 증상을 함께 본다.
+
+    판정은 "지금 전문가에게 알려야 하는가"까지다. 재발 여부나 시술 성공
+    여부를 말하지 않는다 — 그건 홀터·심전도와 의료진의 영역이다.
+    """
+    out: list[Finding] = []
+    v = today.vitals
+    t = _text(today)
+    red = _has(t, "chest_pain") or _has(t, "dyspnea") or _has(t, "syncope")
+
+    if v.ecg_afib:
+        out.append(Finding(
+            Severity.URGENT if red else Severity.ROUTINE,
+            "ecg_afib",
+            "웨어러블 심전도에서 심방세동 판정이 기록되었습니다",
+            "기록을 저장해 담당 의료진에게 전달하세요. 흉통·호흡곤란·실신이 "
+            f"동반되면 즉시 {HOTLINES['emergency']}",
+            ["Apple Watch ECG"],
+        ))
+
+    if v.afib_burden_pct is not None and v.afib_burden_pct > 0:
+        prior = [r.vitals.afib_burden_pct for r in list(history)[-7:]
+                 if r.vitals.afib_burden_pct is not None]
+        avg = sum(prior) / len(prior) if prior else 0.0
+        rising = v.afib_burden_pct > max(5.0, avg * 2)
+        out.append(Finding(
+            Severity.URGENT if red else (Severity.ROUTINE if rising else Severity.MONITOR),
+            "afib_burden",
+            f"심방세동 부담 {v.afib_burden_pct:.1f}%"
+            + (f" (최근 7일 평균 {avg:.1f}%)" if prior else ""),
+            "추세를 기록해 다음 진료 때 보여주세요"
+            + (". 뚜렷이 올라간 상태라 담당의 확인을 권합니다" if rising else "")
+            + (f". 흉통·호흡곤란·실신 동반 시 즉시 {HOTLINES['emergency']}" if red else ""),
+            ["Apple Watch 심방세동 이력"],
+        ))
+
+    if v.irregular_rhythm_events:
+        out.append(Finding(
+            Severity.URGENT if red else Severity.ROUTINE,
+            "irregular_rhythm_alert",
+            f"불규칙 심박 알림 {v.irregular_rhythm_events}회",
+            "가능하면 알림 직후 심전도를 기록하고 담당 의료진에게 전달하세요",
+            ["웨어러블 알림"],
+        ))
+
+    if _has(t, "palpitation"):
+        out.append(Finding(
+            Severity.URGENT if red else Severity.ROUTINE,
+            "palpitation",
+            "두근거림·맥박 불규칙 증상이 기록되었습니다",
+            "증상이 있을 때 심전도를 기록해두면 진료에 크게 도움이 됩니다. "
+            f"흉통·호흡곤란·실신이 동반되면 즉시 {HOTLINES['emergency']}",
+            ["증상 기록"],
+        ))
+
+    if v.high_hr_events:
+        out.append(Finding(
+            Severity.MONITOR, "high_hr_alerts",
+            f"안정 시 고심박 알림 {v.high_hr_events}회",
+            "반복되면 다음 진료 때 알리세요", ["웨어러블 알림"],
+        ))
+    return out
+
+
+RULES: list[Callable] = [
+    _rule_symptoms, _rule_vitals, _rule_deviation, _rule_profile,
+    _rule_medications, _rule_arrhythmia,
+]
 
 
 def evaluate(

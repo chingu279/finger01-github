@@ -767,3 +767,170 @@ def test_imported_days_still_feed_the_baseline(tmp_path):
     r = rd.compute(hist, today, Profile())
     assert r.band != "UNKNOWN"
     assert r.confidence >= 0.5
+
+
+# ── 부정맥 · 복약 맥락 (심방세동 절제술 후 사용자 사례에서 도출) ──
+
+# 심방세동 절제술 후에 흔한 처방 구성. 특정인의 기록이 아니라
+# '이 계열들이 함께 있을 때' 규칙이 어떻게 도는지를 고정하기 위한 픽스처다.
+AFIB_PROFILE = Profile(
+    sex="male",
+    conditions=["심방세동 (카테터 절제술)"],
+    medications=["드로네다론", "에독사반", "로수바스타틴", "에스오메프라졸"],
+)
+
+
+def test_medication_classes_are_extracted_from_free_text():
+    """'릭시아나 60mg' 이라는 문자열만으로는 규칙을 쓸 수 없다.
+    계열을 알아야 머리 외상의 긴급도가 달라진다."""
+    found = tg.med_classes(AFIB_PROFILE)
+    assert {"anticoagulant", "antiarrhythmic", "statin"} <= found
+    assert "bleeding_risk" in found and "rate_control" in found
+
+
+def test_no_medication_no_class():
+    assert tg.med_classes(Profile()) == set()
+
+
+def test_head_injury_on_anticoagulant_is_emergency_even_without_symptoms():
+    """두개내 출혈은 수 시간~수일 뒤에 나타날 수 있다.
+    '지금 괜찮다'가 안전을 뜻하지 않는 대표적인 경우다."""
+    r = make(1)
+    r.subjective.note = "어제 넘어져서 머리를 좀 부딪혔는데 괜찮음"
+    res = tg.evaluate([], r, AFIB_PROFILE)
+    assert res.severity == tg.Severity.EMERGENCY
+    assert res.blocks_exercise
+    assert any(f.code == "anticoag_head_injury" for f in res.findings)
+
+
+def test_head_injury_without_anticoagulant_does_not_fire_that_rule():
+    r = make(1)
+    r.subjective.note = "머리를 부딪혔다"
+    codes = [f.code for f in tg.evaluate([], r, Profile()).findings]
+    assert "anticoag_head_injury" not in codes
+
+
+def test_nsaid_with_anticoagulant_is_flagged():
+    r = make(1)
+    r.subjective.note = "두통이 있어서 나프록센 먹을까 고민"
+    codes = [f.code for f in tg.evaluate([], r, AFIB_PROFILE).findings]
+    assert "anticoag_nsaid" in codes
+
+
+def test_bradycardia_on_rate_control_escalates_when_symptomatic():
+    plain, symptomatic = make(1), make(2)
+    plain.vitals.resting_hr = 42
+    symptomatic.vitals.resting_hr = 42
+    symptomatic.subjective.note = "어지럽고 실신할 뻔했다"
+
+    a = tg.evaluate([], plain, AFIB_PROFILE)
+    b = tg.evaluate([], symptomatic, AFIB_PROFILE)
+    assert any(f.code == "bradycardia_on_rate_control" for f in a.findings)
+    assert b.severity >= tg.Severity.URGENT
+
+
+def test_statin_myalgia_with_dark_urine_is_urgent():
+    r = make(1)
+    r.subjective.note = "전신 근육통이 심하고 소변이 진한 갈색"
+    res = tg.evaluate([], r, AFIB_PROFILE)
+    assert res.severity == tg.Severity.URGENT
+    assert res.blocks_exercise
+
+
+def test_ecg_afib_is_reported():
+    r = make(1)
+    r.vitals.ecg_afib = True
+    codes = [f.code for f in tg.evaluate([], r, AFIB_PROFILE).findings]
+    assert "ecg_afib" in codes
+
+
+def test_afib_burden_escalates_with_red_flag_symptoms():
+    quiet, red = make(1), make(2)
+    quiet.vitals.afib_burden_pct = 8.0
+    red.vitals.afib_burden_pct = 8.0
+    red.subjective.symptoms = ["호흡곤란"]
+
+    assert tg.evaluate([], quiet, AFIB_PROFILE).severity <= tg.Severity.ROUTINE
+    assert tg.evaluate([], red, AFIB_PROFILE).severity >= tg.Severity.URGENT
+
+
+def test_medication_rules_never_lower_severity():
+    """복약 규칙은 상향만 한다. 어떤 약을 먹는다고 위험이 낮아지지 않는다."""
+    r = make(1)
+    r.subjective.symptoms = ["가슴 통증", "식은땀"]
+    plain = tg.evaluate([], r, Profile())
+    with_meds = tg.evaluate([], r, AFIB_PROFILE)
+    assert with_meds.severity >= plain.severity == tg.Severity.EMERGENCY
+
+
+# ── AF 중의 HRV 는 자율신경 지표가 아니다 ────────────────────────
+
+def test_hrv_is_unusable_on_afib_days():
+    from health.readiness import hrv_usable
+
+    clean = make(1, vitals__hrv_rmssd_ms=50)
+    assert hrv_usable(clean)
+
+    for field, value in [("afib_burden_pct", 3.0),
+                         ("irregular_rhythm_events", 1),
+                         ("ecg_afib", True)]:
+        r = make(2, vitals__hrv_rmssd_ms=210)
+        setattr(r.vitals, field, value)
+        assert not hrv_usable(r), field
+
+
+def test_afib_hrv_spike_does_not_inflate_readiness():
+    """AF 중에는 RR 간격이 불규칙해져 HRV 가 폭증한다. 회복이 좋아진 게
+    아니라 부정맥을 재고 있는 것이다. 이걸 그대로 두면 가장 쉬어야 할 날에
+    '고강도 훈련 가능'이 나온다."""
+    base = dict(vitals__resting_hr=57, sleep__total_min=430, subjective__energy=3)
+    hist = [make(i + 1, **base, vitals__hrv_rmssd_ms=45 + (i % 5)) for i in range(21)]
+
+    spike = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=210), Profile())
+    afib = make(25, **base, vitals__hrv_rmssd_ms=210)
+    afib.vitals.afib_burden_pct = 12.0
+    masked = rd.compute(hist, afib, Profile())
+
+    assert spike.band == "GREEN"                 # 지금까지의 (잘못된) 동작
+    assert masked.score < spike.score
+    assert any("심방세동" in f for f in masked.flags)
+
+
+def test_afib_night_does_not_poison_the_hrv_baseline():
+    """AF 하룻밤의 rMSSD 200ms 가 28일 평균을 밀어버리면, 그 뒤로 정상인
+    날들이 전부 'HRV 가 낮다'로 읽힌다. 오염은 하루로 끝나지 않는다."""
+    base = dict(vitals__resting_hr=57, sleep__total_min=430)
+    hist = [make(i + 1, **base, vitals__hrv_rmssd_ms=50) for i in range(20)]
+    bad = make(21, **base, vitals__hrv_rmssd_ms=220)
+    bad.vitals.afib_burden_pct = 30.0
+    hist.append(bad)
+
+    metrics = bl.compute(rd._mask_unusable_hrv(hist), make(25, **base, vitals__hrv_rmssd_ms=50))
+    m = metrics["vitals.hrv_rmssd_ms"]
+    assert m.mean == 50.0                        # 220 이 평균에 섞이지 않았다
+    assert abs(m.z) < 0.5                        # 정상인 날이 '낮음'으로 읽히지 않는다
+
+
+def test_brief_does_not_call_an_elevated_resting_hr_a_supporting_factor():
+    """안정시 심박은 낮을수록 좋다. 원시 z 의 부호로 판단하면 평소보다
+    13bpm 높은 날이 '받쳐준 요인'으로 뒤집혀 나온다 — 심장 시술 후
+    회복 중인 사람에게는 정반대의 신호를 주는 셈이다."""
+    from health import report as rp
+
+    st = Store(Path(__import__("tempfile").mkdtemp()))
+    for i in range(20):
+        st.upsert(make(i + 1, vitals__resting_hr=60 + (i % 5) - 2))
+    st.upsert(make(25, vitals__resting_hr=76))
+
+    text = rp.daily_brief(st, "2026-01-25")
+    supporting = [ln for ln in text.splitlines() if "받쳐준" in ln]
+    assert not any("안정시 심박" in ln for ln in supporting)
+    assert any("안정시 심박" in ln for ln in text.splitlines() if "끌어내린" in ln)
+
+
+def test_low_confidence_scores_are_marked_provisional():
+    """지표 한두 개로 낸 점수를 단정적으로 말하면 경보 피로를 부른다."""
+    hist = [make(i + 1, vitals__resting_hr=60) for i in range(20)]
+    r = rd.compute(hist, make(25, vitals__resting_hr=76), Profile())
+    assert r.confidence < 0.4
+    assert "잠정" in r.advice

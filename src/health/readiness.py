@@ -24,6 +24,45 @@ from .store import Profile
 HRV_PATHS = ("vitals.hrv_rmssd_ms", "vitals.hrv_sdnn_ms")
 
 
+def hrv_usable(rec: DailyRecord) -> bool:
+    """그날의 HRV 를 자율신경 지표로 쓸 수 있는가.
+
+    심방세동 중에는 RR 간격이 불규칙해져 rMSSD·SDNN 이 폭증한다.
+    회복이 좋아진 게 아니라 **부정맥을 재고 있는 것**이다. 그대로 두면
+    AF 에피소드 날에 "준비도 GREEN, 고강도 훈련 가능"이 나온다 —
+    정확히 반대여야 하는 상황에서.
+
+    그래서 AF 신호가 있는 날은 HRV 를 준비도에서 빼고, 뺐다는 사실을
+    사용자에게 알린다. 조용히 빼면 왜 점수가 달라졌는지 알 수 없다.
+    """
+    v = rec.vitals
+    if v.afib_burden_pct is not None and v.afib_burden_pct > 0:
+        return False
+    if v.irregular_rhythm_events:
+        return False
+    if v.ecg_afib:
+        return False
+    return True
+
+
+def _mask_unusable_hrv(history: Sequence[DailyRecord]) -> list[DailyRecord]:
+    """베이스라인에서도 AF 날의 HRV 를 뺀다.
+
+    AF 하룻밤의 rMSSD 200ms 가 28일 평균을 통째로 밀어버리면, 그 뒤로
+    정상인 날들이 전부 "HRV 가 낮다"로 읽힌다. 오염은 하루로 끝나지 않는다.
+    """
+    out: list[DailyRecord] = []
+    for rec in history:
+        if hrv_usable(rec):
+            out.append(rec)
+            continue
+        clone = DailyRecord.from_dict(rec.to_dict())
+        clone.vitals.hrv_rmssd_ms = None
+        clone.vitals.hrv_sdnn_ms = None
+        out.append(clone)
+    return out
+
+
 def max_weight() -> float:
     """달성 가능한 최대 가중치 합. 신뢰도의 분모다.
 
@@ -95,6 +134,8 @@ def compute(
 ) -> Readiness:
     """history는 today 이전의 기록(베이스라인용), today는 평가 대상."""
     profile = profile or Profile()
+    history = _mask_unusable_hrv(history)
+    hrv_ok = hrv_usable(today)
     metrics = bl.compute(history, today)
 
     weighted = 0.0
@@ -105,7 +146,7 @@ def compute(
     # 활성 지표로 더 확립돼 있어 우선한다.
     hrv_in_use = next(
         (p for p in HRV_PATHS if (metrics.get(p) and metrics[p].z is not None)), None
-    )
+    ) if hrv_ok else None
 
     for path, w in WEIGHTS.items():
         if path in HRV_PATHS and path != hrv_in_use:
@@ -132,6 +173,11 @@ def compute(
             confidence=0.0,
         )
         _attach_flags(r, history, today, metrics, profile)
+        if not hrv_ok:
+            r.flags.append(
+                "심방세동 신호가 있어 오늘 HRV 를 준비도에서 제외했습니다 "
+                "— AF 중의 HRV 는 자율신경이 아니라 부정맥을 반영합니다"
+            )
         return r
 
     normalized = weighted / used                     # 대략 -3 ~ +3
@@ -141,6 +187,11 @@ def compute(
     #          이게 없으면 평범한 날이 CAUTION으로 떨어져 경보 피로를 부른다.
     score = 100.0 * bl.sigmoid(normalized * SLOPE + OFFSET)
     band, advice = _band(score)
+
+    if used / max_weight() < 0.4:
+        # 지표 한두 개로 낸 점수를 단정적으로 말하면 경보 피로를 부른다.
+        # 점수는 그대로 두되(보수적인 쪽이 안전하다) 잠정임을 밝힌다.
+        advice = f"{advice} — 다만 지표가 부족해 잠정 판정입니다"
 
     r = Readiness(
         date=today.date,
@@ -152,6 +203,11 @@ def compute(
     )
 
     _attach_flags(r, history, today, metrics, profile)
+    if not hrv_ok:
+        r.flags.append(
+            "심방세동 신호가 있어 오늘 HRV 를 준비도에서 제외했습니다 "
+            "— AF 중의 HRV 는 자율신경이 아니라 부정맥을 반영합니다"
+        )
     return r
 
 

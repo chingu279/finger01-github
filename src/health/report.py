@@ -41,8 +41,11 @@ def daily_brief(store: Store, date: str) -> str:
 
     lines += ["## 2. 준비도", r.summary()]
     if r.contributors:
-        worst = [f"{lbl}(z={z:+.1f})" for lbl, z, _ in r.contributors[:3] if z < -0.5]
-        best = [f"{lbl}(z={z:+.1f})" for lbl, z, _ in reversed(r.contributors[-3:]) if z > 0.5]
+        # 원시 z 의 부호로 판단하면 안 된다. 안정시 심박은 낮을수록 좋아서
+        # z=+1.9(평소보다 13bpm 높음)가 "받쳐준 요인"으로 뒤집혀 나온다.
+        # 세 번째 값(impact)이 이미 방향 보정된 기여분이다.
+        worst = [f"{lbl}(z={z:+.1f})" for lbl, z, imp in r.contributors[:3] if imp < -0.02]
+        best = [f"{lbl}(z={z:+.1f})" for lbl, z, imp in reversed(r.contributors[-3:]) if imp > 0.02]
         if worst:
             lines.append(f"- 끌어내린 요인: {', '.join(worst)}")
         if best:

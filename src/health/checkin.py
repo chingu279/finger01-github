@@ -183,6 +183,9 @@ RANGES: dict[str, tuple[float, float]] = {
     "intake.water_ml": (0, 10_000),
     "subjective.pain_nrs": (0, 10),
     "intake.alcohol_units": (0, 60),
+    "vitals.afib_burden_pct": (0, 100),
+    "vitals.walking_hr_avg": (40, 220),
+    "vitals.vo2max": (5, 90),
 }
 
 

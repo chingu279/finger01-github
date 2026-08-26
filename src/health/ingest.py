@@ -80,6 +80,28 @@ QUANTITY_MAP: dict[str, tuple[str, str, Any]] = {
         ("intake.caffeine_mg", "sum", None),
     "HKQuantityTypeIdentifierDietaryWater":
         ("intake.water_ml", "sum", None),
+    "HKQuantityTypeIdentifierWalkingHeartRateAverage":
+        ("vitals.walking_hr_avg", "mean", None),
+    "HKQuantityTypeIdentifierVO2Max":
+        ("vitals.vo2max", "mean", None),
+    "HKQuantityTypeIdentifierAtrialFibrillationBurden":
+        # iOS 16+ '심방세동 이력'. 하루 중 AF 로 보낸 시간 비율.
+        # Apple 은 여기서도 분율(0.12)로 내보낸다.
+        ("vitals.afib_burden_pct", "mean", _to_pct),
+}
+
+# 개수를 세는 이벤트형 레코드. 값이 아니라 발생 횟수가 신호다.
+EVENT_MAP: dict[str, str] = {
+    "HKCategoryTypeIdentifierIrregularHeartRhythmEvent": "vitals.irregular_rhythm_events",
+    "HKCategoryTypeIdentifierHighHeartRateEvent": "vitals.high_hr_events",
+    "HKCategoryTypeIdentifierLowHeartRateEvent": "vitals.low_hr_events",
+}
+
+# ECG 판정에서 심방세동을 뜻하는 값들
+ECG_AFIB_VALUES = {
+    "HKElectrocardiogramClassificationAtrialFibrillation",
+    "AtrialFibrillation",
+    "심방세동",
 }
 
 ASLEEP_VALUES = {
@@ -201,7 +223,7 @@ def iter_elements(path: Path) -> Iterator[ET.Element]:
     for event, elem in context:
         if event != "end":
             continue
-        if elem.tag in ("Record", "Workout"):
+        if elem.tag in ("Record", "Workout", "Electrocardiogram"):
             yield elem
         elem.clear()
         root.clear()     # 루트에 쌓이는 참조까지 끊어야 실제로 해제된다
@@ -216,6 +238,8 @@ def parse_apple(path: Path, since: str | None = None) -> tuple[dict[str, DailyRe
         defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     sleep_intervals: list[Interval] = []
     workouts: dict[str, list[Workout]] = defaultdict(list)
+    events: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    ecg: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for elem in iter_elements(path):
         rep.records_seen += 1
@@ -224,6 +248,12 @@ def parse_apple(path: Path, since: str | None = None) -> tuple[dict[str, DailyRe
             continue
         day = start.date().isoformat()
         if since and day < since:
+            continue
+
+        if elem.tag == "Electrocardiogram":
+            ecg[day]["count"] += 1
+            if (elem.get("classification") or "") in ECG_AFIB_VALUES:
+                ecg[day]["afib"] += 1
             continue
 
         if elem.tag == "Workout":
@@ -247,6 +277,11 @@ def parse_apple(path: Path, since: str | None = None) -> tuple[dict[str, DailyRe
             if end:
                 sleep_intervals.append(Interval(
                     start, end, elem.get("value", ""), elem.get("sourceName", "")))
+            continue
+
+        event_target = EVENT_MAP.get(rtype)
+        if event_target:
+            events[day][event_target] += 1
             continue
 
         mapped = QUANTITY_MAP.get(rtype)
@@ -298,6 +333,17 @@ def parse_apple(path: Path, since: str | None = None) -> tuple[dict[str, DailyRe
 
     for day, ws in workouts.items():
         rec_for(day).activity.workouts.extend(ws)
+
+    for day, counts in events.items():
+        r = rec_for(day)
+        for target, n in counts.items():
+            _set_checked(r, target, n, rep)
+
+    for day, counts in ecg.items():
+        r = rec_for(day)
+        _set_checked(r, "vitals.ecg_readings", counts["count"], rep)
+        if counts["count"]:
+            _set_checked(r, "vitals.ecg_afib", counts["afib"] > 0, rep)
 
     for day, block in _assemble_sleep(sleep_intervals).items():
         if since and day < since:
