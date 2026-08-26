@@ -1107,3 +1107,38 @@ def test_walking_heart_rate_counts_toward_readiness():
     normal = rd.compute(hist, make(25, **base, vitals__walking_hr_avg=79), Profile())
     strained = rd.compute(hist, make(25, **base, vitals__walking_hr_avg=95), Profile())
     assert strained.score < normal.score
+
+
+def test_brief_does_not_praise_an_hrv_it_discarded(tmp_path):
+    """준비도에서 뺀 값을 지표 상세에서 '▲좋음'이라고 적으면 같은 화면이
+    서로 반대되는 말을 한다. 사용자가 뭘 믿어야 할지 모르게 만드는 출력은
+    없느니만 못하다."""
+    from health import report as rp
+
+    st = Store(tmp_path)
+    st.save_profile(CARDIAC_PROFILE)
+    for i in range(21):
+        st.upsert(make(i + 1, vitals__resting_hr=57, sleep__total_min=430,
+                       vitals__hrv_sdnn_ms=26 + (i % 5) - 2))
+    st.upsert(make(25, vitals__resting_hr=59, sleep__total_min=430,
+                   vitals__hrv_sdnn_ms=38))
+
+    text = rp.daily_brief(st, "2026-01-25")
+    hrv_line = next(ln for ln in text.splitlines() if "HRV(SDNN)" in ln)
+    assert "▲좋음" not in hrv_line
+    assert "제외" in hrv_line
+
+
+def test_hrv_exclusion_reason_is_structured_not_just_prose():
+    base = dict(vitals__resting_hr=57, sleep__total_min=430)
+    hist = [make(i + 1, **base, vitals__hrv_sdnn_ms=26 + (i % 5) - 2) for i in range(21)]
+
+    spike = rd.compute(hist, make(25, **base, vitals__hrv_sdnn_ms=38), CARDIAC_PROFILE)
+    assert spike.hrv_excluded == "spike"
+
+    af = make(25, **base, vitals__hrv_sdnn_ms=38)
+    af.vitals.afib_burden_pct = 9.0
+    assert rd.compute(hist, af, CARDIAC_PROFILE).hrv_excluded == "afib"
+
+    clean = rd.compute(hist, make(25, **base, vitals__hrv_sdnn_ms=27), Profile())
+    assert clean.hrv_excluded is None

@@ -55,10 +55,23 @@ def daily_brief(store: Store, date: str) -> str:
     lines.append("")
 
     lines.append("## 3. 지표 상세 (개인 베이스라인 28일 대비)")
+    EXCLUDED_NOTE = {
+        "afib": "심방세동 신호로 준비도에서 제외",
+        "spike": "부정맥 이력 + 급등으로 준비도에서 제외",
+    }
     for path, _, _, _ in bl.TRACKED:
         m = metrics.get(path)
-        if m and m.latest is not None:
-            lines.append(f"- {m.describe()}")
+        if not (m and m.latest is not None):
+            continue
+        text = m.describe()
+        if path in rd.HRV_PATHS and r.hrv_excluded:
+            # 준비도에서 뺀 값을 지표 상세에서 "▲좋음"이라고 적으면
+            # 같은 화면이 서로 반대되는 말을 한다. 화살표를 지우고
+            # 왜 뺐는지를 그 자리에 쓴다.
+            for arrow in ("▲좋음", "▼주의", "◆변동", "· 평소"):
+                text = text.replace(arrow, "")
+            text = f"{text.rstrip()} ⊘ {EXCLUDED_NOTE[r.hrv_excluded]}"
+        lines.append(f"- {text}")
     lines.append("")
 
     lines.append("## 4. 오늘의 맥락")

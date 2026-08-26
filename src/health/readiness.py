@@ -138,6 +138,9 @@ class Readiness:
     flags: list[str] = field(default_factory=list)
     acwr: float | None = None
     sleep_debt_min: float | None = None
+    hrv_excluded: str | None = None
+    #  "afib" | "spike" | None. 브리핑이 지표 상세에서 같은 값을 "▲좋음"이라고
+    #  적지 않으려면, 왜 뺐는지를 문자열이 아니라 값으로 넘겨야 한다.
 
     def summary(self) -> str:
         conf = "높음" if self.confidence >= 0.7 else "보통" if self.confidence >= 0.4 else "낮음"
@@ -246,6 +249,7 @@ def compute(
         )
         _attach_flags(r, history, today, metrics, profile)
         if not hrv_ok:
+            r.hrv_excluded = "afib"
             r.flags.append(
                 "심방세동 신호가 있어 오늘 HRV 를 준비도에서 제외했습니다 "
                 "— AF 중의 HRV 는 자율신경이 아니라 부정맥을 반영합니다"
@@ -276,12 +280,14 @@ def compute(
 
     _attach_flags(r, history, today, metrics, profile)
     if hrv_spike:
+        r.hrv_excluded = "spike"
         m = metrics.get(hrv_in_use)
         r.flags.append(
             f"HRV 가 평소보다 크게 높습니다 (z={m.z:+.1f}) — 부정맥 이력이 있어 "
             "회복 신호로 쓰지 않았습니다. 가능하면 심전도를 기록해 두세요"
         )
     if not hrv_ok:
+        r.hrv_excluded = "afib"
         r.flags.append(
             "심방세동 신호가 있어 오늘 HRV 를 준비도에서 제외했습니다 "
             "— AF 중의 HRV 는 자율신경이 아니라 부정맥을 반영합니다"
