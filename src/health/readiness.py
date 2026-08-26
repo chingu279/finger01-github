@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -22,6 +23,36 @@ from .store import Profile
 # 넣으면 한쪽만 있는 사람은 그만큼 신뢰도가 깎이고, 둘 다 있는 사람은
 # 같은 신호를 두 번 세게 된다. 그래서 하나를 골라 쓴다.
 HRV_PATHS = ("vitals.hrv_rmssd_ms", "vitals.hrv_sdnn_ms")
+
+# HRV 가 평소보다 높을 때 점수에 반영할 최대 폭.
+#   왜 상단만 조이는가: HRV 가 평소보다 낮은 것은 회복 부족의 신뢰할 만한
+#   신호지만, 평소보다 크게 높은 것은 회복이 두 배로 좋아졌다는 뜻이 아니다.
+#   측정 잡음이거나 부정맥이거나 짧은 측정 구간의 산물인 경우가 더 많다.
+#   그래서 하단은 그대로 두고 상단만 1.0σ 로 자른다.
+HRV_POSITIVE_CAP = 1.0
+
+# 부정맥 이력이 있는 사람에게 이만큼의 HRV 급등은 '확인 대상'이다.
+HRV_SPIKE_Z = 2.0
+
+ARRHYTHMIA_PATTERN = (
+    r"심방세동|심방조동|부정맥|세동|조동|빈맥|서맥|절제술|기외수축|"
+    r"atrial\s*fib|afib|arrhythm|flutter|ablation"
+)
+ANTIARRHYTHMIC_PATTERN = (
+    r"멀택|드로네다론|아미오다론|코다론|소탈롤|플레카이니드|프로파페논|"
+    r"dronedarone|amiodarone|sotalol|flecainide|propafenone"
+)
+
+
+def has_arrhythmia_history(profile: Profile) -> bool:
+    """부정맥 이력 또는 항부정맥제 복용 여부.
+
+    이 사람들에게는 HRV 해석 자체가 달라진다 — 높은 HRV 가 좋은 신호라는
+    전제가 성립하지 않는다.
+    """
+    text = " ".join(profile.conditions + profile.medications)
+    return bool(re.search(ARRHYTHMIA_PATTERN, text, re.I)
+                or re.search(ANTIARRHYTHMIC_PATTERN, text, re.I))
 
 
 def hrv_usable(rec: DailyRecord) -> bool:
@@ -75,6 +106,7 @@ WEIGHTS: dict[str, float] = {
     "vitals.hrv_rmssd_ms": 0.26,     # 자율신경 회복의 가장 민감한 대리지표
     "vitals.hrv_sdnn_ms": 0.26,      # rMSSD 가 없을 때의 대체 (둘 중 하나만 쓰인다)
     "vitals.resting_hr": 0.18,
+    "vitals.walking_hr_avg": 0.06,   # 같은 걸음에 심장이 더 일했는지 — 부하의 직접 신호
     "sleep.total_min": 0.16,
     "sleep.efficiency_pct": 0.10,
     "subjective.energy": 0.10,
@@ -112,11 +144,41 @@ class Readiness:
         return f"준비도 {self.score:.0f}/100 [{self.band}] — {self.advice} (신뢰도 {conf})"
 
 
-def _band(score: float) -> tuple[str, str]:
+# 프로필에서 '고강도 운동을 제한한다'고 읽어야 할 표현들.
+#   느슨하게 잡는다 — 놓쳐서 고강도를 권하는 쪽이, 과하게 잡아
+#   중강도를 권하는 쪽보다 비싸다.
+INTENSITY_LIMIT_PATTERN = (
+    r"강한\s*운동|고강도|무리한|과격|심장.{0,6}부담|부담.{0,6}운동|"
+    r"운동.{0,10}(제한|자제|금지|회피|주의)|재활|시술|수술|"
+    r"심방세동|부정맥|협심증|심부전|심근|판막|스텐트|절제술"
+)
+
+
+def intensity_limited(profile: Profile) -> str | None:
+    """프로필이 고강도 운동을 제한하는가. 제한하면 그 근거 문장을 돌려준다.
+
+    준비도가 아무리 높아도 프로필이 금지한 것을 권할 수는 없다.
+    점수는 오늘의 몸 상태고, 금기는 그 위에 있는 경계다.
+    """
+    for line in list(profile.contraindications) + list(profile.conditions):
+        if re.search(INTENSITY_LIMIT_PATTERN, line, re.I):
+            return line
+    return None
+
+
+def _band(score: float, profile: Profile | None = None) -> tuple[str, str]:
     for threshold, name, advice in BANDS:
         if score >= threshold:
-            return name, advice
-    return BANDS[-1][1], BANDS[-1][2]
+            break
+    else:
+        threshold, name, advice = BANDS[-1]
+
+    if name == "GREEN" and profile is not None:
+        limit = intensity_limited(profile)
+        if limit:
+            advice = ("컨디션은 좋음 — 다만 프로필 제한으로 중강도까지. "
+                      f"근거: {limit}")
+    return name, advice
 
 
 def sleep_debt(history: Sequence[DailyRecord], need_min: float, days: int = 7) -> float | None:
@@ -136,6 +198,7 @@ def compute(
     profile = profile or Profile()
     history = _mask_unusable_hrv(history)
     hrv_ok = hrv_usable(today)
+    arrhythmia = has_arrhythmia_history(profile)
     metrics = bl.compute(history, today)
 
     weighted = 0.0
@@ -148,6 +211,7 @@ def compute(
         (p for p in HRV_PATHS if (metrics.get(p) and metrics[p].z is not None)), None
     ) if hrv_ok else None
 
+    hrv_spike = False
     for path, w in WEIGHTS.items():
         if path in HRV_PATHS and path != hrv_in_use:
             continue
@@ -158,6 +222,14 @@ def compute(
         signed = m.z * (m.direction if m.direction != 0 else 1)
         # z를 ±3으로 클리핑. 웨어러블 이상치 하나가 점수를 지배하지 않게.
         signed = max(-3.0, min(3.0, signed))
+        if path in HRV_PATHS and signed > 0:
+            if m.z >= HRV_SPIKE_Z and arrhythmia:
+                # 부정맥 이력자의 HRV 급등은 회복 신호로 쓰지 않는다.
+                # 오늘 AF 부담 기록이 비어 있어도(Apple 은 주 단위 추정치라
+                # 당일엔 흔히 비어 있다) 이 경로로 걸린다.
+                hrv_spike = True
+                continue
+            signed = min(signed, HRV_POSITIVE_CAP)
         weighted += w * signed
         used += w
         contributors.append((m.label, m.z, w * signed))
@@ -186,7 +258,7 @@ def compute(
     #   OFFSET z=0(딱 평소인 날)이 68점 = AMBER 중앙에 오도록 하는 절편.
     #          이게 없으면 평범한 날이 CAUTION으로 떨어져 경보 피로를 부른다.
     score = 100.0 * bl.sigmoid(normalized * SLOPE + OFFSET)
-    band, advice = _band(score)
+    band, advice = _band(score, profile)
 
     if used / max_weight() < 0.4:
         # 지표 한두 개로 낸 점수를 단정적으로 말하면 경보 피로를 부른다.
@@ -203,6 +275,12 @@ def compute(
     )
 
     _attach_flags(r, history, today, metrics, profile)
+    if hrv_spike:
+        m = metrics.get(hrv_in_use)
+        r.flags.append(
+            f"HRV 가 평소보다 크게 높습니다 (z={m.z:+.1f}) — 부정맥 이력이 있어 "
+            "회복 신호로 쓰지 않았습니다. 가능하면 심전도를 기록해 두세요"
+        )
     if not hrv_ok:
         r.flags.append(
             "심방세동 신호가 있어 오늘 HRV 를 준비도에서 제외했습니다 "

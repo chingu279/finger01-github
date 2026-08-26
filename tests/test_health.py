@@ -655,7 +655,7 @@ def test_readiness_uses_sdnn_when_rmssd_is_absent():
     hist = [make(i + 1, **base, vitals__hrv_sdnn_ms=60 + (i % 5) - 2) for i in range(21)]
     r = rd.compute(hist, make(25, **base, vitals__hrv_sdnn_ms=60), Profile())
     assert any("SDNN" in label for label, _, _ in r.contributors)
-    assert r.confidence >= 0.7
+    assert r.confidence >= 0.6
 
 
 def test_only_one_hrv_metric_is_counted():
@@ -671,7 +671,8 @@ def test_only_one_hrv_metric_is_counted():
 
 def test_confidence_can_reach_one_with_a_single_hrv_source():
     """HRV 항목이 둘이라고 분모가 커지면 신뢰도가 1에 닿지 못한다."""
-    full = dict(vitals__resting_hr=56, sleep__total_min=445, sleep__efficiency_pct=90,
+    full = dict(vitals__resting_hr=56, vitals__walking_hr_avg=78,
+                sleep__total_min=445, sleep__efficiency_pct=90,
                 subjective__energy=3, subjective__soreness=2, subjective__stress=2,
                 subjective__mood=3)
     hist = [make(i + 1, **full, vitals__hrv_sdnn_ms=60 + (i % 5) - 2) for i in range(21)]
@@ -886,12 +887,16 @@ def test_afib_hrv_spike_does_not_inflate_readiness():
     base = dict(vitals__resting_hr=57, sleep__total_min=430, subjective__energy=3)
     hist = [make(i + 1, **base, vitals__hrv_rmssd_ms=45 + (i % 5)) for i in range(21)]
 
+    normal = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=48), Profile())
     spike = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=210), Profile())
     afib = make(25, **base, vitals__hrv_rmssd_ms=210)
     afib.vitals.afib_burden_pct = 12.0
     masked = rd.compute(hist, afib, Profile())
 
-    assert spike.band == "GREEN"                 # 지금까지의 (잘못된) 동작
+    # HRV 상단 클립: 급등이 점수를 밀어 올리는 폭이 제한된다
+    assert spike.score - normal.score < 12
+    assert spike.band != "GREEN"
+    # AF 표지가 있으면 아예 제외된다
     assert masked.score < spike.score
     assert any("심방세동" in f for f in masked.flags)
 
@@ -1001,3 +1006,104 @@ def test_split_night_is_reported_not_silently_dropped():
     _assemble_sleep([asleep(25, 23, 0, 26, 3, 0),      # 4시간 자고
                      asleep(26, 7, 0, 26, 9, 30)], rep)  # 4시간 공백 뒤 2.5시간 더
     assert rep.split_nights == ["2026-08-26"]
+
+
+# ── 준비도가 프로필의 금기를 넘지 않는다 ────────────────────────
+
+CARDIAC_PROFILE = Profile(
+    conditions=["심방세동"],
+    contraindications=["너무 강한 운동(심장에 부담을 주는 운동)"],
+)
+
+
+def _green_day(**extra):
+    """준비도가 GREEN 에 닿는 하루를 만든다."""
+    base = dict(vitals__resting_hr=52, sleep__total_min=480, sleep__efficiency_pct=94,
+                subjective__energy=5, subjective__soreness=1, subjective__stress=1,
+                subjective__mood=5)
+    hist = [make(i + 1, vitals__resting_hr=57, sleep__total_min=430,
+                 sleep__efficiency_pct=88, subjective__energy=3,
+                 subjective__soreness=3, subjective__stress=3,
+                 subjective__mood=3, vitals__hrv_rmssd_ms=45 + (i % 5))
+            for i in range(21)]
+    return hist, make(25, **base, **extra)
+
+
+def test_green_never_recommends_high_intensity_when_the_profile_forbids_it():
+    """프로필이 금지한 것을 시스템이 권해서는 안 된다.
+    점수는 오늘의 몸 상태고, 금기는 그 위에 있는 경계다."""
+    hist, today = _green_day(vitals__hrv_rmssd_ms=50)
+
+    free = rd.compute(hist, today, Profile())
+    limited = rd.compute(hist, today, CARDIAC_PROFILE)
+
+    assert free.band == limited.band == "GREEN"
+    assert "고강도" in free.advice
+    assert "고강도" not in limited.advice
+    assert "중강도" in limited.advice
+    assert "심장에 부담" in limited.advice        # 근거를 함께 보여준다
+
+
+def test_intensity_limit_is_detected_from_conditions_too():
+    """금기 칸이 비어 있어도 기저질환에서 읽어낸다."""
+    assert rd.intensity_limited(Profile(conditions=["관상동맥 스텐트 삽입"]))
+    assert rd.intensity_limited(Profile(conditions=["심방세동"]))
+    assert rd.intensity_limited(Profile(contraindications=["무리한 운동 자제"]))
+    assert rd.intensity_limited(Profile(conditions=["알레르기성 비염"])) is None
+
+
+def test_lower_bands_are_unchanged_by_the_limit():
+    """제한은 GREEN 문구만 바꾼다. 회복 권고까지 흔들면 안 된다."""
+    hist = [make(i + 1, vitals__resting_hr=57, subjective__energy=3) for i in range(21)]
+    bad = make(25, vitals__resting_hr=72, subjective__energy=1)
+    assert rd.compute(hist, bad, Profile()).advice == \
+           rd.compute(hist, bad, CARDIAC_PROFILE).advice
+
+
+# ── 높은 HRV 가 무조건 좋은 신호는 아니다 ───────────────────────
+
+def test_hrv_upside_is_capped():
+    """HRV 가 평소보다 낮은 것은 신뢰할 만한 신호지만, 크게 높은 것은
+    회복이 두 배 좋아졌다는 뜻이 아니다 — 잡음이거나 부정맥일 때가 많다."""
+    base = dict(vitals__resting_hr=57, sleep__total_min=430, subjective__energy=3)
+    hist = [make(i + 1, **base, vitals__hrv_rmssd_ms=45 + (i % 5)) for i in range(21)]
+
+    mild = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=52), Profile())
+    huge = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=300), Profile())
+    assert huge.score - mild.score < 5       # 상단이 잘려 거의 차이가 없다
+
+    # 하단은 그대로 — 낮은 HRV 는 끝까지 반영된다
+    low = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=12), Profile())
+    assert mild.score - low.score > 15
+
+
+def test_hrv_spike_is_discarded_for_users_with_arrhythmia_history():
+    """Apple 의 심방세동 이력은 주 단위 추정치라 에피소드 당일엔 비어 있다.
+    표지가 없어도 이력이 있는 사람의 HRV 급등은 회복 신호로 쓰지 않는다."""
+    base = dict(vitals__resting_hr=57, sleep__total_min=430, subjective__energy=3)
+    hist = [make(i + 1, **base, vitals__hrv_sdnn_ms=26 + (i % 5) - 2) for i in range(21)]
+    today = make(25, **base, vitals__hrv_sdnn_ms=38)      # z ≈ +2.4
+
+    plain = rd.compute(hist, today, Profile())
+    cardiac = rd.compute(hist, today, CARDIAC_PROFILE)
+
+    assert cardiac.score < plain.score
+    assert any("심전도" in f for f in cardiac.flags)
+    assert not any("HRV" in label for label, _, _ in cardiac.contributors)
+
+
+def test_arrhythmia_history_is_detected_from_conditions_or_medications():
+    assert rd.has_arrhythmia_history(Profile(conditions=["심방세동"]))
+    assert rd.has_arrhythmia_history(Profile(medications=["멀택정 400mg"]))
+    assert rd.has_arrhythmia_history(Profile(conditions=["카테터 절제술 후"]))
+    assert not rd.has_arrhythmia_history(Profile(conditions=["고혈압"]))
+
+
+def test_walking_heart_rate_counts_toward_readiness():
+    """같은 걸음에 심장이 더 일했다면 그건 부하의 직접 신호다."""
+    base = dict(vitals__resting_hr=57, sleep__total_min=430, subjective__energy=3)
+    hist = [make(i + 1, **base, vitals__walking_hr_avg=79 + (i % 5) - 2) for i in range(21)]
+
+    normal = rd.compute(hist, make(25, **base, vitals__walking_hr_avg=79), Profile())
+    strained = rd.compute(hist, make(25, **base, vitals__walking_hr_avg=95), Profile())
+    assert strained.score < normal.score
