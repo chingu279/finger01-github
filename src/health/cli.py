@@ -404,6 +404,13 @@ def cmd_import(args, store: Store) -> int:
     return 0
 
 
+def cmd_serve(args, store: Store) -> int:
+    from . import web
+
+    web.serve(store, port=args.port, open_browser=not args.no_open)
+    return 0
+
+
 def cmd_score(args, store: Store) -> int:
     d = args.date or _today()
     today = store.load(d)
@@ -533,6 +540,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--since", help="이 날짜 이후만 (YYYY-MM-DD)")
     s.add_argument("--dry-run", action="store_true", help="저장하지 않고 보고만")
     s.set_defaults(func=cmd_import)
+
+    s = sub.add_parser("serve", help="로컬 웹 체크인 화면 (이 컴퓨터에서만 접속)")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-open", action="store_true", help="브라우저를 자동으로 열지 않음")
+    s.set_defaults(func=cmd_serve)
 
     s = sub.add_parser("score", help="준비도 계산")
     s.add_argument("--date"); s.add_argument("--json", action="store_true")

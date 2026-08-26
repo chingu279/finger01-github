@@ -1171,3 +1171,168 @@ def test_common_drugs_are_classified_even_without_rules():
     assert {"ppi", "acetaminophen", "supplement"} <= tg.med_classes(p)
     codes = [f.code for f in tg.evaluate([], make(1), p).findings]
     assert "unclassified_medication" not in codes
+
+
+# ── 로컬 웹 UI ─────────────────────────────────────────────────
+
+@pytest.fixture
+def server(tmp_path):
+    """실제 서버를 임시 포트에 띄운다. 모킹하면 라우팅·직렬화 버그를 놓친다."""
+    import json as _json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from health import web
+
+    st = Store(tmp_path)
+    st.save_profile(Profile(
+        reviewed_at="2026-01-01T07:00:00+09:00",
+        tracking=["subjective.energy", "vitals.bp", "subjective.note"],
+        conditions=["심방세동"], medications=["릭시아나(에독사반) 60mg"]))
+    from datetime import date as _date, timedelta as _td
+
+    for i in range(21):                      # 오늘로부터 거슬러 21일
+        d = (_date.today() - _td(days=i + 1)).isoformat()
+        rec = DailyRecord(date=d, sources=["apple-health"])
+        rec.vitals.resting_hr = 57 + (i % 3) - 1
+        rec.vitals.hrv_sdnn_ms = 26 + (i % 4)
+        if i % 2 == 0:                       # 결측이 섞이도록
+            rec.sleep.total_min = 430 + (i % 5) * 10
+        st.upsert(rec)
+
+    handler = type("Bound", (web.HealthHandler,), {"store": st})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    class Client:
+        base = f"http://127.0.0.1:{port}"
+        store = st
+
+        def get(self, path):
+            with urllib.request.urlopen(self.base + path, timeout=5) as r:
+                return _json.loads(r.read())
+
+        def raw(self, path):
+            try:
+                with urllib.request.urlopen(self.base + path, timeout=5) as r:
+                    return r.status, r.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+
+        def post(self, path, payload):
+            req = urllib.request.Request(
+                self.base + path, method="POST",
+                data=_json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return _json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return _json.loads(e.read())
+
+    yield Client()
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_server_binds_to_loopback_only():
+    """0.0.0.0 으로 열면 같은 와이파이의 누구나 건강기록을 본다."""
+    src = (REPO / "src" / "health" / "web.py").read_text("utf-8")
+    assert '"0.0.0.0"' not in src
+    assert 'ThreadingHTTPServer(("127.0.0.1"' in src
+
+
+def test_today_lists_only_unfilled_tracked_fields(server):
+    d = server.get("/api/today")
+    keys = [f["key"] for f in d["fields"]]
+    assert keys == ["subjective.energy", "vitals.bp", "subjective.note"]
+    assert all(f["filled"] is False for f in d["fields"])
+
+
+def test_cli_only_hint_text_is_stripped_for_web(server):
+    """'(Enter=건너뜀)' 은 터미널 얘기다. 웹에서는 거짓말이 된다."""
+    note = next(f for f in server.get("/api/today")["fields"]
+                if f["key"] == "subjective.note")
+    assert "Enter" not in note["hint"]
+
+
+def test_checkin_saves_and_returns_the_brief(server):
+    res = server.post("/api/checkin", {
+        "values": {"subjective.energy": "4", "vitals.bp": "127/77",
+                   "subjective.note": "걸음이 적었던 날"},
+        "seconds": 38})
+    assert res["saved"] == 3 and res["rejected"] == []
+    assert "readiness" in res and "triage" in res
+
+    rec = server.store.load(res["date"])
+    assert rec.subjective.energy == 4
+    assert rec.vitals.bp_systolic == 127 and rec.vitals.bp_diastolic == 77
+    assert "checkin" in rec.sources          # 게이트가 세는 표식
+
+
+def test_web_uses_the_same_validation_as_the_cli(server):
+    """웹에만 검증이 없으면 오타 하나가 베이스라인을 민다."""
+    res = server.post("/api/checkin", {"values": {"vitals.bp": "270/77"}})
+    assert res["saved"] == 0
+    assert res["rejected"][0]["key"] == "vitals.bp"
+    assert "범위" in res["rejected"][0]["reason"]
+
+    res = server.post("/api/checkin", {"values": {"vitals.bp": "백이십칠"}})
+    assert res["saved"] == 0 and res["rejected"]
+
+
+def test_brief_marks_excluded_hrv(server):
+    """준비도에서 뺀 HRV 를 화면이 '좋음'으로 그리지 않으려면
+    제외 사유가 API 에 실려야 한다."""
+    from datetime import date as _date
+
+    today = _date.today().isoformat()
+    rec = server.store.load_or_new(today)
+    rec.vitals.hrv_sdnn_ms = 60          # 평소 26±4 대비 급등
+    rec.vitals.resting_hr = 57
+    server.store.upsert(rec)
+    b = server.get(f"/api/brief?date={today}")
+    assert b["readiness"]["hrv_excluded"] == "spike"
+    hrv = next(m for m in b["metrics"] if "HRV" in m["label"])
+    assert hrv["deviation"] == "excluded"
+
+
+def test_trend_reports_gaps_as_null_not_zero(server):
+    """결측을 0 으로 채우면 그래프가 '그날 안 잤다'고 말한다."""
+    d = server.get("/api/trend?days=30")
+    assert len(d["dates"]) == 30
+    sleep = next(s for s in d["series"] if s["path"] == "sleep.total_min")
+    assert None in sleep["values"]
+    assert 0 not in [v for v in sleep["values"] if v is not None]
+    assert sleep["mean"] is not None and sleep["sd"] is not None
+
+
+def test_unknown_paths_and_traversal_are_refused(server):
+    for path in ("/../../etc/passwd", "/api/nope", "/etc/passwd"):
+        code, body = server.raw(path)
+        assert code == 404, path
+        assert b"root:" not in body
+
+
+def test_malformed_json_does_not_crash_the_server(server):
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(server.base + "/api/checkin", method="POST",
+                                 data=b"not json",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+    # 서버가 살아 있어야 한다
+    assert server.get("/api/today")["fields"]
+
+
+def test_ui_file_ships_with_the_package():
+    from health import web
+
+    assert (web.UI_DIR / "index.html").exists()

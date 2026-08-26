@@ -51,6 +51,7 @@ cd finger01-github
 | `./health checkin` | **매일 이것 하나.** 90초 안에 끝나야 한다 |
 | `./health status` | Phase 0 게이트 통과 여부 |
 | `./health import <파일>` | 애플 건강 내보내기 적재 |
+| `./health serve` | 웹 체크인 화면 (이 컴퓨터에서만) |
 
 인터프리터를 직접 지정하려면 `PYTHON=/path/to/python3 ./health checkin`.
 `pip install -e .` 를 하면 어느 디렉터리에서든 `health` 로 부를 수 있다.
@@ -78,6 +79,28 @@ cd finger01-github
 | `./health weekly` | 주간 팩트시트 |
 | `./health seed --days 30` | 데모용 합성 데이터 (실제 값 아님) |
 | `./health log --set vitals.weight_kg=70.2` | 단건 기록·보정 |
+
+## 웹 화면과 아침 알람
+
+터미널에서 Enter 를 두 번 눌러 입력이 씹히는 문제가 있다면 웹 화면을 쓴다.
+리커트 항목은 버튼 한 번, Enter 를 쓸 일이 없다.
+
+```bash
+./health serve
+```
+
+**서버는 `127.0.0.1` 에만 바인딩된다.** 같은 와이파이의 다른 기기에서도 열리지
+않고, 데이터가 이 컴퓨터를 떠나지 않는다. 표준 라이브러리만 쓰므로 설치할 것도 없다.
+
+화면은 셋이다 — **체크인**(오늘 안 채운 항목만), **오늘**(준비도·안전 판정·지표),
+**추세**(지표별 그래프 + 평소 범위 띠).
+
+매일 아침 알림을 받으려면 (macOS):
+```bash
+sh scripts/morning-alarm.sh 07:30
+```
+LaunchAgent 두 개를 설치한다 — 서버(로그인 시 자동 실행)와 알람(지정 시각에
+알림 + 브라우저 열기). 제거는 `sh scripts/morning-alarm.sh --uninstall`.
 
 ## 애플워치 데이터 넣기
 
