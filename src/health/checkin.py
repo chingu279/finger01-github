@@ -29,6 +29,60 @@ DEFAULT_TRACKING = [
     "subjective.note",
 ]
 
+MAX_TRACKING = 5
+
+# 웨어러블이 자동으로 채워주는 항목. 이걸 매일 손으로 묻는 것이
+# 체크인이 길어지는 가장 흔한 이유다 — 자동 수집에 맡기고 슬롯을 비운다.
+WEARABLE_COVERED = {
+    "sleep.total_min", "sleep.efficiency_pct", "sleep.latency_min",
+    "sleep.bedtime", "sleep.waketime",
+    "vitals.resting_hr", "vitals.hrv_rmssd_ms", "vitals.spo2_pct",
+    "activity.steps",
+}
+
+# 목표별 추적 후보. 순서가 우선순위다 — 슬롯이 모자라면 뒤에서부터 잘린다.
+GOAL_PRESETS: dict[str, tuple[str, list[str]]] = {
+    "sleep":   ("수면 개선",       ["subjective.energy", "sleep.total_min",
+                                    "intake.last_caffeine_at", "sleep.latency_min"]),
+    "fitness": ("체력 / 운동",     ["subjective.energy", "subjective.soreness",
+                                    "vitals.resting_hr"]),
+    "mental":  ("스트레스 / 정신건강", ["subjective.stress", "subjective.mood",
+                                    "vitals.hrv_rmssd_ms"]),
+    "bp":      ("혈압 관리",       ["vitals.bp"]),
+    "glucose": ("혈당 관리",       ["vitals.blood_glucose_mgdl"]),
+    "weight":  ("체중 관리",       ["vitals.weight_kg"]),
+    "pain":    ("통증 관리",       ["subjective.pain_nrs", "subjective.pain_site"]),
+}
+
+
+def suggest_tracking(goals: list[str], has_wearable: bool) -> list[str]:
+    """목표와 기기 보유 여부로 매일 물을 항목을 제안한다.
+
+    규칙 셋:
+      · 웨어러블이 채워주는 항목은 매일 묻지 않는다 (자동 수집에 맡긴다)
+      · 목표별 후보를 우선순위 순으로 모으되 중복은 한 번만
+      · 자유 서술 한 줄은 항상 넣는다 — 레드플래그 스캔 대상이고,
+        구조화된 항목이 놓치는 것의 대부분이 여기서 나온다
+    """
+    picked: list[str] = []
+    for goal in goals:
+        _, candidates = GOAL_PRESETS.get(goal, ("", []))
+        for path in candidates:
+            if has_wearable and path in WEARABLE_COVERED:
+                continue
+            if path not in picked:
+                picked.append(path)
+
+    if not picked:
+        # 목표를 고르지 않았다. 자유 서술 한 줄만 남기면 구조화 지표가
+        # 통째로 사라져 준비도를 영영 계산할 수 없다 — 기본 세트로 돌아간다.
+        return list(DEFAULT_TRACKING)
+
+    picked = picked[: MAX_TRACKING - 1]        # 마지막 한 자리는 자유 서술 몫
+    if "subjective.note" not in picked:
+        picked.append("subjective.note")
+    return picked
+
 
 @dataclass
 class Prompt:
@@ -38,11 +92,24 @@ class Prompt:
     hint: str = ""
     unit: str = ""
     parse: Callable[[str], Any] | None = None
+    writes: list[str] | None = None
+    #  writes 가 있으면 한 번의 질문이 여러 필드를 채운다. 혈압이 그렇다 —
+    #  사람은 "수축기"와 "이완기"를 따로 생각하지 않고 "120에 80"으로 생각한다.
+    #  질문을 둘로 쪼개면 그만큼 체크인이 길어지고, 길어지면 끊긴다.
 
     @property
     def single_key(self) -> bool:
-        """리커트/NRS 는 한 글자만 받으면 되므로 Enter 없이 넘어갈 수 있다."""
+        """리커트는 한 글자만 받으면 되므로 Enter 없이 넘어갈 수 있다."""
         return self.kind == "likert"
+
+    @property
+    def targets(self) -> list[str]:
+        return self.writes or [self.path]
+
+    def apply(self, rec: DailyRecord, value: Any) -> None:
+        values = value if isinstance(value, tuple) else (value,)
+        for path, v in zip(self.targets, values):
+            rec.set_path(path, v)
 
 
 def _duration(raw: str) -> float:
@@ -56,7 +123,18 @@ def _duration(raw: str) -> float:
     return round(v * 60, 1) if v < 24 else v
 
 
+def _bp(raw: str) -> tuple[float, float]:
+    """혈압을 "120/80" 한 번에 받는다."""
+    for sep in ("/", "-", " "):
+        if sep in raw:
+            hi, lo = raw.split(sep, 1)
+            return float(hi.strip()), float(lo.strip())
+    raise ValueError("120/80 형태로 입력해 주세요")
+
+
 PROMPTS: dict[str, Prompt] = {
+    "vitals.bp": Prompt("vitals.bp_systolic", "혈압", "number", "120/80", "mmHg", _bp,
+                        writes=["vitals.bp_systolic", "vitals.bp_diastolic"]),
     "subjective.energy":   Prompt("subjective.energy", "활력", "likert", "1 바닥 · 3 보통 · 5 최고"),
     "subjective.mood":     Prompt("subjective.mood", "기분", "likert", "1 최악 · 3 보통 · 5 최고"),
     "subjective.stress":   Prompt("subjective.stress", "스트레스", "likert", "1 없음 · 3 보통 · 5 극심"),
@@ -183,9 +261,14 @@ def _ask(p: Prompt, existing: Any) -> Any:
             print(f"    ↑ 다시 입력해 주세요 ({e})")
             continue
 
-        lo, hi = RANGES.get(p.path, (float("-inf"), float("inf")))
-        if isinstance(v, (int, float)) and not lo <= v <= hi:
-            print(f"    ↑ {lo:g}~{hi:g} 범위를 벗어났습니다. 오타가 아닌지 확인해 주세요")
+        bad = False
+        for target, part in zip(p.targets, v if isinstance(v, tuple) else (v,)):
+            lo, hi = RANGES.get(target, (float("-inf"), float("inf")))
+            if isinstance(part, (int, float)) and not lo <= part <= hi:
+                print(f"    ↑ {lo:g}~{hi:g} 범위를 벗어났습니다. 오타가 아닌지 확인해 주세요")
+                bad = True
+                break
+        if bad:
             continue
         return v
 
@@ -204,12 +287,12 @@ def run(rec: DailyRecord, tracking: list[str]) -> tuple[DailyRecord, float, int]
         if p is None:
             print(f"  (알 수 없는 항목 '{path}' — 건너뜀)")
             continue
-        if rec.get_path(path) is not None:
-            continue                          # 이미 채워짐
+        if all(rec.get_path(t) is not None for t in p.targets):
+            continue                          # 이미 채워짐 — 다시 묻는 것이 곧 마찰이다
         asked += 1
         v = _ask(p, None)
         if v is not None:
-            rec.set_path(path, v)
+            p.apply(rec, v)
             filled += 1
 
     if asked == 0:

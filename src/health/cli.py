@@ -102,21 +102,57 @@ def _fill_profile(p: Profile) -> Profile:
         else:
             setattr(p, field_name, raw)
 
-    print("  매일 기록할 항목을 고릅니다. 기본 5개를 그대로 쓰려면 Enter.")
-    print(f"  기본: {', '.join(ck.DEFAULT_TRACKING)}")
-    print(f"  가능한 항목: {', '.join(sorted(ck.PROMPTS))}")
-    try:
-        raw = input("  › ").strip()
-    except (EOFError, KeyboardInterrupt):
-        raw = ""
-    if raw:
-        chosen = [s.strip() for s in raw.split(",") if s.strip() in ck.PROMPTS]
-        if len(chosen) > 6:
-            print(f"  ⚠ {len(chosen)}개를 고르셨습니다. 5개를 넘으면 2주 안에 기록이 끊깁니다.")
-        p.tracking = chosen
-
+    p.tracking = _choose_tracking(p)
     p.reviewed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     return p
+
+
+def _prompt(text: str, default: str = "") -> str:
+    try:
+        return input(text).strip() or default
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+
+def _choose_tracking(p: Profile) -> list[str]:
+    """매일 물을 항목을 목표와 기기 보유 여부로 제안하고 확인받는다.
+
+    자유 입력으로 받으면 사람은 거의 항상 너무 많이 고른다. 제안을
+    기본값으로 두고 바꾸고 싶을 때만 손대게 하는 편이 훨씬 잘 지켜진다.
+    """
+    print("\n매일 기록할 항목을 정합니다.\n")
+
+    print("  웨어러블(스마트워치·수면링)을 쓰시나요?")
+    print("  쓰신다면 수면·안정시심박·걸음은 자동 수집에 맡기고 매일 묻지 않습니다.")
+    has_wearable = _prompt("  y/n [y] › ", "y").lower().startswith("y")
+
+    print("\n  목표를 고르세요 (번호를 쉼표로, 예: 1,2,4)")
+    keys = list(ck.GOAL_PRESETS)
+    for i, key in enumerate(keys, 1):
+        label, paths = ck.GOAL_PRESETS[key]
+        print(f"    {i}. {label}")
+    raw = _prompt("  › ")
+    goals = [keys[int(n) - 1] for n in raw.replace(" ", "").split(",")
+             if n.isdigit() and 1 <= int(n) <= len(keys)]
+
+    suggested = ck.suggest_tracking(goals, has_wearable)
+    print(f"\n  제안: {', '.join(suggested)}")
+    if has_wearable:
+        print("  (수면·안정시심박·걸음은 Phase 2의 wearable-ingest 가 채웁니다)")
+    print(f"\n  그대로 쓰려면 Enter. 직접 정하려면 쉼표로 입력하세요.")
+    print(f"  가능한 항목: {', '.join(sorted(ck.PROMPTS))}")
+    raw = _prompt("  › ")
+    if not raw:
+        return suggested
+
+    chosen = [t.strip() for t in raw.split(",") if t.strip() in ck.PROMPTS]
+    unknown = [t.strip() for t in raw.split(",") if t.strip() and t.strip() not in ck.PROMPTS]
+    if unknown:
+        print(f"  ⚠ 알 수 없는 항목은 제외했습니다: {', '.join(unknown)}")
+    if len(chosen) > ck.MAX_TRACKING:
+        print(f"  ⚠ {len(chosen)}개를 고르셨습니다. {ck.MAX_TRACKING}개를 넘으면 "
+              "2주 안에 기록이 끊깁니다 — status 게이트에서 걸립니다.")
+    return chosen or suggested
 
 
 def cmd_init(args, store: Store) -> int:

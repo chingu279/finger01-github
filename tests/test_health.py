@@ -301,22 +301,25 @@ def test_profile_tracking_defaults_to_five_items():
     assert all(path in PROMPTS for path in DEFAULT_TRACKING)
 
 
-def test_every_prompt_path_exists_on_the_record():
-    """프롬프트 경로가 스키마와 어긋나면 체크인이 런타임에 죽는다."""
+def test_every_prompt_writes_to_a_real_record_field():
+    """프롬프트 경로가 스키마와 어긋나면 체크인이 런타임에 죽는다.
+    복합 프롬프트(vitals.bp)는 키가 아니라 targets 가 실제 경로다."""
     from health.checkin import PROMPTS
 
     rec = make(1)
-    for path in PROMPTS:
-        rec.set_path(path, 1)             # KeyError 가 나면 실패
+    for prompt in PROMPTS.values():
+        for target in prompt.targets:
+            rec.set_path(target, 1)       # KeyError 가 나면 실패
 
 
-def test_every_prompt_has_a_range_or_is_free_text():
+def test_every_numeric_prompt_has_a_physiological_range():
     """숫자 항목에 범위가 없으면 오타 하나가 베이스라인을 밀어버린다."""
     from health.checkin import PROMPTS, RANGES
 
-    for path, p in PROMPTS.items():
+    for key, p in PROMPTS.items():
         if p.kind in ("number", "duration", "nrs"):
-            assert path in RANGES, f"{path} 에 생리학적 범위가 없습니다"
+            for target in p.targets:
+                assert target in RANGES, f"{key} → {target} 에 생리학적 범위가 없습니다"
 
 
 # ── Phase 0 게이트 ─────────────────────────────────────────────
@@ -352,3 +355,81 @@ def test_streak_is_zero_with_no_records():
     from health.cli import _streak
 
     assert _streak([], "2026-08-25") == (0, False)
+
+
+# ── 복합 프롬프트 · 목표 프리셋 ────────────────────────────────
+
+def test_blood_pressure_is_one_question_two_fields():
+    """사람은 "수축기"와 "이완기"를 따로 생각하지 않는다.
+    질문을 둘로 쪼개면 체크인이 길어지고, 길어지면 끊긴다."""
+    from health.checkin import PROMPTS
+
+    p = PROMPTS["vitals.bp"]
+    rec = make(1)
+    p.apply(rec, p.parse("128/82"))
+    assert rec.vitals.bp_systolic == 128
+    assert rec.vitals.bp_diastolic == 82
+
+
+def test_blood_pressure_accepts_common_separators():
+    from health.checkin import _bp
+
+    assert _bp("120/80") == (120, 80)
+    assert _bp("120-80") == (120, 80)
+    assert _bp("120 80") == (120, 80)
+    with pytest.raises(ValueError):
+        _bp("120")
+
+
+def test_wearable_owners_are_not_asked_for_auto_collected_metrics():
+    """웨어러블이 채우는 항목을 매일 손으로 묻는 것이
+    체크인이 길어지는 가장 흔한 이유다."""
+    from health.checkin import WEARABLE_COVERED, suggest_tracking
+
+    picked = suggest_tracking(["sleep", "fitness"], has_wearable=True)
+    assert not (set(picked) & WEARABLE_COVERED)
+
+    without = suggest_tracking(["sleep"], has_wearable=False)
+    assert "sleep.total_min" in without
+
+
+def test_suggestion_respects_the_five_item_cap():
+    from health.checkin import MAX_TRACKING, GOAL_PRESETS, suggest_tracking
+
+    picked = suggest_tracking(list(GOAL_PRESETS), has_wearable=False)
+    assert len(picked) <= MAX_TRACKING
+
+
+def test_suggestion_always_keeps_the_free_text_line():
+    """구조화된 항목이 놓치는 것의 대부분이 자유 서술에서 나오고,
+    그 텍스트는 레드플래그 스캔 대상이다."""
+    from health.checkin import GOAL_PRESETS, suggest_tracking
+
+    for goal in GOAL_PRESETS:
+        assert "subjective.note" in suggest_tracking([goal], has_wearable=True)
+
+
+def test_suggestion_falls_back_when_no_goals_chosen():
+    from health.checkin import DEFAULT_TRACKING, suggest_tracking
+
+    assert suggest_tracking([], has_wearable=False) == DEFAULT_TRACKING
+
+
+def test_goal_preset_paths_are_all_real_prompts():
+    """프리셋에 오타가 있으면 체크인이 조용히 그 항목을 건너뛴다."""
+    from health.checkin import GOAL_PRESETS, PROMPTS
+
+    for goal, (label, paths) in GOAL_PRESETS.items():
+        assert label
+        for path in paths:
+            assert path in PROMPTS, f"{goal} 프리셋의 '{path}' 가 PROMPTS 에 없습니다"
+
+
+def test_checkin_does_not_reask_a_filled_composite_field():
+    from health.checkin import PROMPTS, run
+
+    rec = make(1)
+    rec.vitals.bp_systolic, rec.vitals.bp_diastolic = 120, 80
+    rec, seconds, filled = run(rec, ["vitals.bp"])   # 입력을 안 받아도 통과해야 한다
+    assert filled == 0
+    assert rec.vitals.bp_systolic == 120
