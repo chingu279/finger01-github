@@ -1142,3 +1142,32 @@ def test_hrv_exclusion_reason_is_structured_not_just_prose():
 
     clean = rd.compute(hist, make(25, **base, vitals__hrv_sdnn_ms=27), Profile())
     assert clean.hrv_excluded is None
+
+
+def test_blood_pressure_has_a_personal_baseline():
+    """가정혈압을 매일 재는 사람에게 절대 기준(140/90)만 보여주면
+    자기 범위를 벗어난 날을 놓친다."""
+    hist = [make(i + 1, vitals__bp_systolic=110 + (i % 5) - 2,
+                 vitals__bp_diastolic=65 + (i % 4) - 1) for i in range(20)]
+    m = bl.compute(hist, make(25, vitals__bp_systolic=127, vitals__bp_diastolic=77))
+    assert m["vitals.bp_systolic"].z > 2
+    assert m["vitals.bp_systolic"].deviation == "worse"     # 낮을수록 좋은 방향
+
+
+def test_bp_sd_floor_prevents_daily_false_alarms():
+    """가정혈압은 같은 사람 안에서도 흔들린다. 하한이 없으면
+    ±3mmHg 변동에 매일 '평소와 다름'이 뜬다."""
+    hist = [make(i + 1, vitals__bp_systolic=110 + (i % 2)) for i in range(20)]
+    m = bl.compute(hist, make(25, vitals__bp_systolic=114))["vitals.bp_systolic"]
+    assert m.sd >= 5.0                      # 관측 표준편차(0.5)가 아니라 하한이 쓰인다
+    assert abs(m.z) < 1.5                   # 4mmHg 차이로는 경보하지 않는다
+
+
+def test_common_drugs_are_classified_even_without_rules():
+    """넥시움 같은 흔한 약까지 '계열 미상'으로 매일 경고하면
+    진짜 경고를 무시하게 된다."""
+    p = Profile(medications=["넥시움정 40mg", "타이레놀 500mg", "비타민D"])
+    assert tg.unclassified_medications(p) == []
+    assert {"ppi", "acetaminophen", "supplement"} <= tg.med_classes(p)
+    codes = [f.code for f in tg.evaluate([], make(1), p).findings]
+    assert "unclassified_medication" not in codes

@@ -86,7 +86,21 @@ MED_CLASS_PATTERNS: dict[str, str] = {
               r"rosuvastatin|atorvastatin|simvastatin|pitavastatin",
     "insulin_or_sulfonylurea": r"인슐린|란투스|투제오|글리메피리드|아마릴|글리클라지드|디아미크롱|"
                                r"insulin|glimepiride|gliclazide|glipizide",
+    #  아래는 지금 걸린 규칙이 없는 계열들이다. 그래도 등록해 두는 이유:
+    #  분류에 실패했다는 경고를 "정말 모르는 약"에만 띄우기 위해서다.
+    #  넥시움 같은 흔한 약까지 매일 경고하면 진짜 경고를 무시하게 된다.
+    "ppi": r"넥시움|에스오메프라졸|란스톤|란소프라졸|파리에트|라베프라졸|오메프라졸|덱실란트|"
+           r"esomeprazole|lansoprazole|rabeprazole|omeprazole|pantoprazole",
+    "acetaminophen": r"타이레놀|아세트아미노펜|써스펜|acetaminophen|paracetamol|tylenol",
+    "arb_or_acei": r"로사르탄|코자|발사르탄|디오반|텔미사르탄|올메사르탄|칸데사르탄|라미프릴|에날라프릴|"
+                   r"losartan|valsartan|telmisartan|olmesartan|candesartan|ramipril|enalapril",
+    "thyroid": r"신지로이드|씬지로이드|레보티록신|levothyroxine|synthroid",
+    "supplement": r"비타민|오메가|영양제|유산균|프로바이오틱|마그네슘|칼슘|철분|"
+                  r"vitamin|omega|probiotic|magnesium",
 }
+
+# 계열은 알지만 아직 걸린 규칙이 없는 것들. 프로필 표시에서 구분해 준다.
+CLASSES_WITHOUT_RULES = {"ppi", "acetaminophen", "arb_or_acei", "thyroid", "supplement"}
 
 
 def unclassified_medications(profile: Profile) -> list[str]:

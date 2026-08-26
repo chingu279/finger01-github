@@ -32,6 +32,10 @@ TRACKED: list[tuple[str, str, int, float]] = [
     ("vitals.walking_hr_avg", "보행 심박", -1, 2.0),
     ("vitals.body_temp_c", "체온", 0, 0.2),
     ("vitals.weight_kg", "체중", 0, 0.3),
+    # 가정혈압은 같은 사람 안에서도 ±8mmHg 쯤 흔들린다. 하한을 그보다
+    # 낮게 잡으면 매일 "평소와 다름"이 뜬다.
+    ("vitals.bp_systolic", "수축기 혈압", -1, 5.0),
+    ("vitals.bp_diastolic", "이완기 혈압", -1, 4.0),
     ("sleep.total_min", "총 수면", +1, 20.0),
     ("sleep.efficiency_pct", "수면 효율", +1, 2.0),
     ("sleep.deep_min", "깊은 수면", +1, 8.0),
