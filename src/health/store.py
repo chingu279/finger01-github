@@ -158,6 +158,20 @@ class Store:
             return []
         return sorted(p.stem for p in self.daily_dir.glob("*.json"))
 
+    def checkin_dates(self) -> list[str]:
+        """사람이 직접 체크인한 날.
+
+        웨어러블 적재는 하루 만에 수천 일을 채운다. 그걸 '연속 기록'으로
+        세면 Phase 0 게이트가 거짓으로 통과한다 — 게이트가 보려는 것은
+        웨어러블 보유가 아니라 **매일 기록하는 습관**이다.
+        """
+        out = []
+        for d in self.all_dates():
+            rec = self.load(d)
+            if rec and "checkin" in rec.sources:
+                out.append(d)
+        return out
+
     # ── 이벤트 로그(감사 추적) ─────────────────────────────────
     @property
     def events_path(self) -> Path:

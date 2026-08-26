@@ -299,10 +299,11 @@ def cmd_status(args, store: Store) -> int:
     today = args.date or _today()
     profile = store.load_profile()
     dates = store.all_dates()
-    streak, done_today = _streak(dates, today)
+    checkins = store.checkin_dates()
+    streak, done_today = _streak(checkins, today)
 
-    recent = [d for d in dates if d > (date.fromisoformat(today) - timedelta(days=14)).isoformat()]
-    coverage = len(recent) / 14
+    cutoff = (date.fromisoformat(today) - timedelta(days=14)).isoformat()
+    coverage = len([d for d in checkins if d > cutoff]) / 14
 
     times = [e["seconds"] for e in store.events("checkin") if isinstance(e.get("seconds"), (int, float))]
     median = sorted(times)[len(times) // 2] if times else None
@@ -322,7 +323,7 @@ def cmd_status(args, store: Store) -> int:
         ),
         (
             streak >= 7,
-            f"연속 기록 {streak}일",
+            f"연속 체크인 {streak}일",
             "7일 달성" if streak >= 7 else f"{7 - streak}일 남음",
         ),
         (
@@ -339,8 +340,12 @@ def cmd_status(args, store: Store) -> int:
         mark = "…" if ok is None else ("✓" if ok else "✗")
         print(f"  {mark} {label:<20} {detail}")
     print("─" * 52)
-    print(f"  기록된 날 {len(dates)}일 · 최근 14일 기록률 {coverage * 100:.0f}%"
-          f" · 오늘 {'완료' if done_today else '미기록'}")
+    imported = len(dates) - len(checkins)
+    line = (f"  체크인 {len(checkins)}일 · 최근 14일 체크인율 {coverage * 100:.0f}%"
+            f" · 오늘 {'완료' if done_today else '미기록'}")
+    if imported > 0:
+        line += f"\n  웨어러블 적재 {imported}일 (베이스라인·준비도에 쓰이지만 게이트는 체크인만 센다)"
+    print(line)
 
     if profile.conditions or profile.medications:
         print(f"  안전 경계: 기저질환 {len(profile.conditions)}건 · 복약 {len(profile.medications)}건")

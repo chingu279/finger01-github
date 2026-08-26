@@ -124,6 +124,43 @@ class Interval:
         return max(0.0, (self.end - self.start).total_seconds() / 60)
 
 
+def merged_minutes(intervals: list[Interval]) -> float:
+    """겹치는 구간을 합집합으로 눌러서 분을 센다.
+
+    아이폰과 애플워치가 같은 밤을 각각 기록하면 구간이 겹친다. 그냥 더하면
+    7시간 잔 밤이 14시간이 된다. 실제 11년치 내보내기에서 17.6시간짜리
+    '수면'이 나온 원인이 이것이었고, 16시간을 안 넘긴 밤들은 범위 검증도
+    통과해 **조용히 부풀려진 채** 저장됐다 — 그쪽이 훨씬 위험하다.
+    """
+    if not intervals:
+        return 0.0
+    spans = sorted((i.start, i.end) for i in intervals)
+    total = 0.0
+    cur_start, cur_end = spans[0]
+    for start, end in spans[1:]:
+        if start <= cur_end:
+            cur_end = max(cur_end, end)      # 겹침 — 하나로 합친다
+        else:
+            total += (cur_end - cur_start).total_seconds() / 60
+            cur_start, cur_end = start, end
+    total += (cur_end - cur_start).total_seconds() / 60
+    return max(0.0, total)
+
+
+def merged_spans(intervals: list[Interval]) -> list[tuple[datetime, datetime]]:
+    """겹침을 합친 구간 목록. 각성 '횟수'를 세려면 개수가 필요하다."""
+    if not intervals:
+        return []
+    spans = sorted((i.start, i.end) for i in intervals)
+    out = [spans[0]]
+    for start, end in spans[1:]:
+        if start <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out
+
+
 @dataclass
 class IngestReport:
     days: int = 0
@@ -320,7 +357,7 @@ def _assemble_sleep(intervals: list[Interval]) -> dict[str, dict[str, float | st
         if not asleep:
             continue                     # 침대에만 있었던 구간은 수면이 아니다
 
-        total = sum(i.minutes for i in asleep)
+        total = merged_minutes(asleep)
         if total < 60:
             continue                     # 낮잠·오탐 — 밤잠으로 세지 않는다
 
@@ -331,14 +368,17 @@ def _assemble_sleep(intervals: list[Interval]) -> dict[str, dict[str, float | st
             "sleep.waketime": wake.strftime("%H:%M"),
         }
 
-        deep = sum(i.minutes for i in asleep if i.value.endswith("Deep"))
-        rem = sum(i.minutes for i in asleep if i.value.endswith("REM"))
+        deep = merged_minutes([i for i in asleep if i.value.endswith("Deep")])
+        rem = merged_minutes([i for i in asleep if i.value.endswith("REM")])
         if deep:
             block["sleep.deep_min"] = round(deep, 1)
         if rem:
             block["sleep.rem_min"] = round(rem, 1)
 
-        awakenings = sum(1 for i in session if i.value == AWAKE and i.minutes >= 1)
+        awakenings = sum(
+            1 for start, end in merged_spans([i for i in session if i.value == AWAKE])
+            if (end - start).total_seconds() >= 60
+        )
         if awakenings:
             block["sleep.awakenings"] = awakenings
 
@@ -346,7 +386,7 @@ def _assemble_sleep(intervals: list[Interval]) -> dict[str, dict[str, float | st
         block["sleep.bedtime"] = bed_start.strftime("%H:%M")
 
         if in_bed:
-            bed_min = sum(i.minutes for i in in_bed)
+            bed_min = merged_minutes(in_bed)
             if bed_min > 0:
                 block["sleep.efficiency_pct"] = round(min(100.0, total / bed_min * 100), 1)
             latency = (min(i.start for i in asleep) - bed_start).total_seconds() / 60

@@ -677,3 +677,93 @@ def test_confidence_can_reach_one_with_a_single_hrv_source():
     hist = [make(i + 1, **full, vitals__hrv_sdnn_ms=60 + (i % 5) - 2) for i in range(21)]
     r = rd.compute(hist, make(25, **full, vitals__hrv_sdnn_ms=60), Profile())
     assert r.confidence == 1.0
+
+
+# ── 겹치는 수면 구간 (실제 11년치 내보내기에서 발견) ─────────────
+
+DUAL = Path(__file__).resolve().parent / "fixtures" / "apple_export_dual_source.xml"
+
+
+def test_overlapping_intervals_are_unioned_not_summed():
+    from datetime import datetime as dt
+
+    from health.ingest import Interval, merged_minutes
+
+    def iv(h1, m1, h2, m2):
+        return Interval(dt(2026, 8, 26, h1, m1), dt(2026, 8, 26, h2, m2), "x")
+
+    assert merged_minutes([iv(1, 0, 3, 0), iv(1, 0, 3, 0)]) == 120      # 완전 중복
+    assert merged_minutes([iv(1, 0, 3, 0), iv(2, 0, 4, 0)]) == 180      # 부분 겹침
+    assert merged_minutes([iv(1, 0, 2, 0), iv(3, 0, 4, 0)]) == 120      # 안 겹침
+    assert merged_minutes([]) == 0.0
+
+
+def test_dual_source_night_is_not_double_counted():
+    """아이폰과 애플워치가 같은 밤을 각각 기록한다. 단순 합산하면
+    7.5시간 잔 밤이 15시간이 된다 — 실제 내보내기에서 17.6시간짜리
+    '수면'이 나온 원인이다."""
+    from health.ingest import parse_apple
+
+    recs, _ = parse_apple(DUAL)
+    sleep = recs["2026-08-26"].sleep
+    assert sleep.total_min == 450.0        # 23:20~06:50 = 7시간 30분. 900 이 아니다
+
+
+def test_dual_source_stages_and_efficiency_stay_physiological():
+    from health.ingest import parse_apple
+
+    recs, _ = parse_apple(DUAL)
+    s = recs["2026-08-26"].sleep
+    assert s.deep_min == 65.0
+    assert s.rem_min == 75.0
+    assert s.efficiency_pct <= 100.0       # 침대 시간도 합집합이어야 100%를 안 넘는다
+    assert s.awakenings == 1               # 두 기기가 기록한 같은 각성은 한 번
+
+
+def test_sleep_never_exceeds_the_physiological_ceiling():
+    """겹침을 합치지 않으면 여기서 걸린다 — 그런데 16시간을 안 넘긴
+    밤들은 범위 검증도 통과해 조용히 부풀려진 채 저장된다."""
+    from health.checkin import RANGES
+    from health.ingest import parse_apple
+
+    lo, hi = RANGES["sleep.total_min"]
+    for fixture in (FIXTURE, DUAL):
+        recs, _ = parse_apple(fixture)
+        for rec in recs.values():
+            if rec.sleep.total_min is not None:
+                assert lo <= rec.sleep.total_min <= hi
+
+
+# ── 게이트가 웨어러블 적재로 거짓 통과하지 않는다 ────────────────
+
+def test_streak_counts_checkins_not_imported_days(tmp_path):
+    """웨어러블 적재는 하루 만에 수천 일을 채운다. 그걸 연속 기록으로
+    세면 Phase 0 게이트가 거짓 통과한다."""
+    st = Store(tmp_path)
+    for day in range(1, 11):                     # 적재된 10일 (체크인 아님)
+        r = make(day, vitals__resting_hr=57)
+        r.sources = ["apple-health"]
+        st.upsert(r)
+    assert len(st.all_dates()) == 10
+    assert st.checkin_dates() == []              # 게이트에는 하나도 안 셈된다
+
+    r = make(11, subjective__energy=3)
+    r.sources = ["checkin"]
+    st.upsert(r)
+    assert st.checkin_dates() == ["2026-01-11"]
+
+
+def test_imported_days_still_feed_the_baseline(tmp_path):
+    """게이트에서 빼는 것이지 버리는 것이 아니다 — 적재한 과거 데이터는
+    베이스라인과 준비도에 그대로 쓰인다."""
+    st = Store(tmp_path)
+    for day in range(1, 22):
+        r = make(day, vitals__resting_hr=56 + (day % 3), vitals__hrv_sdnn_ms=60 + (day % 5),
+                 sleep__total_min=440 + (day % 7) * 5)
+        r.sources = ["apple-health"]
+        st.upsert(r)
+    hist = st.history(end="2026-01-21", days=28)
+    today = make(22, vitals__resting_hr=57, vitals__hrv_sdnn_ms=62, sleep__total_min=445)
+    r = rd.compute(hist, today, Profile())
+    assert r.band != "UNKNOWN"
+    assert r.confidence >= 0.5
