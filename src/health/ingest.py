@@ -193,6 +193,7 @@ class IngestReport:
     rejected: list[str] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
     workouts: int = 0
+    split_nights: list[str] = field(default_factory=list)
 
     def render(self) -> str:
         lines = [f"적재 {self.days}일 ({self.first} ~ {self.last})",
@@ -206,6 +207,13 @@ class IngestReport:
             lines += [f"  {r}" for r in self.rejected[:10]]
             if len(self.rejected) > 10:
                 lines.append(f"  … 외 {len(self.rejected) - 10}건")
+        if self.split_nights:
+            lines.append(
+                f"수면 세션이 둘 이상 잡힌 날 {len(self.split_nights)}일 — 긴 쪽만 썼습니다:")
+            lines += [f"  {n}" for n in self.split_nights[:5]]
+            if len(self.split_nights) > 5:
+                lines.append(f"  … 외 {len(self.split_nights) - 5}일")
+            lines.append("  (시계를 밤중에 벗으셨다면 실제 수면이 더 길 수 있습니다)")
         if self.gaps:
             lines.append("기록이 비어 있는 구간:")
             lines += [f"  {g}" for g in self.gaps]
@@ -345,7 +353,7 @@ def parse_apple(path: Path, since: str | None = None) -> tuple[dict[str, DailyRe
         if counts["count"]:
             _set_checked(r, "vitals.ecg_afib", counts["afib"] > 0, rep)
 
-    for day, block in _assemble_sleep(sleep_intervals).items():
+    for day, block in _assemble_sleep(sleep_intervals, rep).items():
         if since and day < since:
             continue
         r = rec_for(day)
@@ -378,7 +386,9 @@ def _set_checked(rec: DailyRecord, target: str, value: Any, rep: IngestReport) -
     rep.by_metric[target] += 1
 
 
-def _assemble_sleep(intervals: list[Interval]) -> dict[str, dict[str, float | str]]:
+def _assemble_sleep(
+    intervals: list[Interval], rep: IngestReport | None = None
+) -> dict[str, dict[str, float | str]]:
     """수면 구간들을 '밤' 단위로 묶어 하루치 수면 지표를 만든다.
 
     귀속 규칙: 자정을 넘긴 수면은 **기상한 날**에 넣는다. 사람은
@@ -439,9 +449,17 @@ def _assemble_sleep(intervals: list[Interval]) -> dict[str, dict[str, float | st
             if latency >= 0:
                 block["sleep.latency_min"] = round(latency, 1)
 
-        # 같은 날에 두 세션이 잡히면 긴 쪽을 그날의 밤으로 본다
-        if day not in out or out[day]["sleep.total_min"] < block["sleep.total_min"]:
-            out[day] = block
+        # 같은 날에 두 세션이 잡히면 긴 쪽을 그날의 밤으로 본다.
+        # 낮잠을 밤잠에 더하지 않기 위해서다 — 수면을 부풀려 "충분히 잤다"고
+        # 말하는 쪽이 짧게 잡는 쪽보다 위험하다.
+        # 다만 조용히 버리지는 않는다: 시계를 밤중에 벗어 밤이 쪼개진 경우라면
+        # 실제 수면이 더 길다. 그 사실을 보고해 사용자가 판단하게 한다.
+        if day in out:
+            if rep is not None and day not in rep.split_nights:
+                rep.split_nights.append(day)
+            if out[day]["sleep.total_min"] >= block["sleep.total_min"]:
+                continue
+        out[day] = block
     return out
 
 

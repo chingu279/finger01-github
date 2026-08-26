@@ -934,3 +934,70 @@ def test_low_confidence_scores_are_marked_provisional():
     r = rd.compute(hist, make(25, vitals__resting_hr=76), Profile())
     assert r.confidence < 0.4
     assert "잠정" in r.advice
+
+
+# ── 안전망이 조용히 사라지지 않게 ───────────────────────────────
+
+def test_abbreviated_medication_names_are_still_classified():
+    """사람은 '릭시아나정 60mg' 이 아니라 '릭시30mg' 이라고 적는다."""
+    p = Profile(medications=["릭시30mg 매아침", "멀택정 400mg", "크레스토 매일아침"])
+    assert "anticoagulant" in tg.med_classes(p)
+    assert "bleeding_risk" in tg.med_classes(p)
+    assert tg.unclassified_medications(p) == []
+
+
+def test_unclassifiable_medication_is_surfaced_not_ignored():
+    """계열을 모르면 복약 기반 규칙이 하나도 걸리지 않는다.
+    규칙이 빠진 것보다 빠졌다는 걸 말하지 않는 쪽이 훨씬 위험하다."""
+    p = Profile(medications=["아침약 1알", "파란약"])
+    assert tg.unclassified_medications(p) == ["아침약 1알", "파란약"]
+
+    codes = [f.code for f in tg.evaluate([], make(1), p).findings]
+    assert "unclassified_medication" in codes
+
+
+def test_partially_classified_list_still_warns_about_the_rest():
+    p = Profile(medications=["크레스토 10mg", "이름 모르는 약"])
+    assert "statin" in tg.med_classes(p)
+    assert tg.unclassified_medications(p) == ["이름 모르는 약"]
+
+
+def test_brief_shows_medication_classes_and_gaps(tmp_path):
+    from health import report as rp
+
+    st = Store(tmp_path)
+    st.save_profile(Profile(medications=["릭시30mg", "정체불명 약"]))
+    st.upsert(make(1, subjective__energy=3))
+    text = rp.daily_brief(st, "2026-01-01")
+    assert "인식된 계열" in text and "anticoagulant" in text
+    assert "계열 미분류" in text and "정체불명 약" in text
+
+
+def test_sparse_metrics_do_not_trigger_missing_alerts():
+    """Apple 의 심방세동 이력은 주 단위 추정치라 매일 들어오지 않는다.
+    이런 지표에 매일 '수집 경로 점검 필요'를 띄우면 경보 피로만 쌓인다."""
+    hist = []
+    for i in range(20):
+        r = make(i + 1, vitals__resting_hr=57, subjective__energy=3)
+        if i % 7 == 0:
+            r.vitals.afib_burden_pct = 2.0
+        hist.append(r)
+    r = rd.compute(hist, make(25, vitals__resting_hr=57, subjective__energy=3), Profile())
+    assert not any("심방세동 부담" in f for f in r.flags)
+
+
+def test_split_night_is_reported_not_silently_dropped():
+    """시계를 밤중에 벗으면 밤이 두 세션으로 쪼개진다. 긴 쪽만 쓰되
+    버렸다는 사실은 알려야 사용자가 판단할 수 있다."""
+    from datetime import datetime as dt
+
+    from health.ingest import IngestReport, Interval, _assemble_sleep
+
+    def asleep(d1, h1, m1, d2, h2, m2):
+        return Interval(dt(2026, 8, d1, h1, m1), dt(2026, 8, d2, h2, m2),
+                        "HKCategoryValueSleepAnalysisAsleepCore")
+
+    rep = IngestReport()
+    _assemble_sleep([asleep(25, 23, 0, 26, 3, 0),      # 4시간 자고
+                     asleep(26, 7, 0, 26, 9, 30)], rep)  # 4시간 공백 뒤 2.5시간 더
+    assert rep.split_nights == ["2026-08-26"]

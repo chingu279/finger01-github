@@ -242,6 +242,19 @@ def _attach_flags(
 MISSING_MIN_HISTORY = 7
 MISSING_SEEN_THRESHOLD = 3
 
+# 설계상 매일 들어오지 않는 지표들. Apple 의 심방세동 이력은 주 단위
+# 추정치이고, VO2Max·체온·보행심박도 조건이 맞을 때만 기록된다.
+# 이런 지표에 매일 "수집 경로 점검 필요"를 띄우면 경보 피로만 쌓인다.
+SPARSE_BY_DESIGN = {
+    "vitals.afib_burden_pct",
+    "vitals.vo2max",
+    "vitals.walking_hr_avg",
+    "vitals.body_temp_c",
+    "vitals.bp_systolic",
+    "vitals.bp_diastolic",
+    "vitals.blood_glucose_mgdl",
+}
+
 
 def _flag_missing(r: Readiness, history: Sequence[DailyRecord], profile: Profile) -> None:
     """수집이 '끊긴' 지표만 경보한다 — 애초에 수집한 적 없는 지표는 뺀다.
@@ -258,6 +271,8 @@ def _flag_missing(r: Readiness, history: Sequence[DailyRecord], profile: Profile
         seen = len(bl.series(history, path))
         if path not in expected and seen < MISSING_SEEN_THRESHOLD:
             continue                      # 수집한 적 없는 지표 — 경보 대상 아님
+        if path in SPARSE_BY_DESIGN and path not in expected:
+            continue                      # 원래 드문드문 들어오는 지표
         if path in HRV_PATHS and any(
             len(bl.series(history, other)) >= MISSING_SEEN_THRESHOLD
             for other in HRV_PATHS if other != path

@@ -87,6 +87,13 @@ def daily_brief(store: Store, date: str) -> str:
     lines.append("## 5. 프로필 제약 (모든 조언이 지켜야 할 경계)")
     lines.append(f"- 기저질환: {', '.join(profile.conditions) or '없음'}")
     lines.append(f"- 복약: {', '.join(profile.medications) or '없음'}")
+    classes = tg.med_classes(profile)
+    if classes:
+        lines.append(f"  · 인식된 계열: {', '.join(sorted(classes))}")
+    unknown = tg.unclassified_medications(profile)
+    if unknown:
+        lines.append(f"  · ⚠ 계열 미분류: {', '.join(unknown)} "
+                     "— 이 약들에는 복약 기반 안전 규칙이 걸려 있지 않습니다")
     lines.append(f"- 금기: {', '.join(profile.contraindications) or '없음'}")
     lines.append(f"- 목표: {', '.join(profile.goals) or '미설정'}")
     if profile.clinician_note:

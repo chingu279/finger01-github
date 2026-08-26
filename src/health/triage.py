@@ -70,7 +70,10 @@ _PATTERNS: dict[str, str] = {
 #   항응고제를 먹는 사람에게 머리 외상은 무증상이어도 응급이고, 맥박 조절
 #   약물을 먹는 사람에게 서맥은 다른 의미를 갖는다.
 MED_CLASS_PATTERNS: dict[str, str] = {
-    "anticoagulant": r"릭시아나|에독사반|자렐토|리바록사반|엘리퀴스|아픽사반|프라닥사|다비가트란|와파린|쿠마딘|"
+    #  사람은 "릭시아나정 60mg" 이 아니라 "릭시30mg" 이라고 적는다.
+    #  축약형까지 잡되, 아래 unclassified_medications() 가 진짜 안전망이다.
+    "anticoagulant": r"릭시아나|릭시\s*\d|에독사반|자렐토|자렐|리바록사반|엘리퀴스|엘리퀴|아픽사반|"
+                     r"프라닥사|프라닥|다비가트란|와파린|쿠마딘|"
                      r"edoxaban|rivaroxaban|apixaban|dabigatran|warfarin",
     "antiplatelet": r"아스피린|플라빅스|클로피도그렐|브릴린타|티카그렐러|프라수그렐|"
                     r"aspirin|clopidogrel|ticagrelor|prasugrel",
@@ -84,6 +87,22 @@ MED_CLASS_PATTERNS: dict[str, str] = {
     "insulin_or_sulfonylurea": r"인슐린|란투스|투제오|글리메피리드|아마릴|글리클라지드|디아미크롱|"
                                r"insulin|glimepiride|gliclazide|glipizide",
 }
+
+
+def unclassified_medications(profile: Profile) -> list[str]:
+    """계열을 알아내지 못한 약 목록.
+
+    이 약들에 대해서는 복약 기반 규칙이 **하나도 걸리지 않는다.**
+    항응고제를 "릭시30mg" 이라고만 적으면 '머리 외상 = 응급' 규칙이
+    조용히 사라진다. 규칙이 빠진 것보다 빠졌다는 걸 말하지 않는 쪽이
+    훨씬 위험하므로, 분류 실패를 반드시 드러낸다.
+    """
+    out: list[str] = []
+    for med in profile.medications:
+        if not any(re.search(pattern, med, re.I)
+                   for pattern in MED_CLASS_PATTERNS.values()):
+            out.append(med)
+    return out
 
 
 def med_classes(profile: Profile) -> set[str]:
@@ -389,6 +408,17 @@ def _rule_profile(history, today, profile) -> list[Finding]:
             "당뇨 이력이 있으나 오늘 혈당 기록이 없습니다",
             "측정값을 기록해야 운동·식이 조언의 안전 경계를 잡을 수 있습니다", [],
         ))
+    unknown = unclassified_medications(profile)
+    if unknown:
+        out.append(Finding(
+            Severity.MONITOR, "unclassified_medication",
+            f"계열을 알 수 없는 약이 있습니다: {', '.join(unknown)}",
+            "성분명을 함께 적어주세요 (예: '릭시아나(에독사반) 60mg'). "
+            "그래야 항응고제·맥박조절제 같은 계열별 안전 규칙이 작동합니다 "
+            "— 지금 이 약들에는 복약 기반 규칙이 하나도 걸려 있지 않습니다",
+            ["프로필 복약 목록"],
+        ))
+
     if today.adherence.meds_missed:
         out.append(Finding(
             Severity.ROUTINE if len(today.adherence.meds_missed) > 1 else Severity.MONITOR,
