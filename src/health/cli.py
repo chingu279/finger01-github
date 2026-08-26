@@ -1,13 +1,13 @@
 """건강 데이터 CLI. 에이전트가 호출하는 도구 표면(tool surface)이기도 하다.
 
-    python -m health init
-    python -m health log --set sleep.total_min=430 --set subjective.energy=3
-    python -m health log --json '{"vitals":{"resting_hr":58}}'
-    python -m health score
-    python -m health triage
-    python -m health brief            # 에이전트에 먹일 일일 팩트시트
-    python -m health weekly
-    python -m health seed --days 30   # 데모용 합성 데이터
+저장소 루트의 `./health` 셸 진입점으로 부르는 것을 기본으로 한다
+(PYTHONPATH 설정 불필요, macOS 의 python3 도 알아서 찾는다).
+
+    ./health init -i
+    ./health checkin
+    ./health status
+    ./health log --set sleep.total_min=430 --set subjective.energy=3
+    ./health score / triage / brief / weekly
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from datetime import date, datetime, timedelta
 
@@ -24,6 +25,20 @@ from . import report as rp
 from . import triage as tg
 from .schema import DailyRecord, Workout
 from .store import Profile, Store
+
+
+def cmd_name() -> str:
+    """안내 문구에 쓸 호출 이름.
+
+    셸 진입점(./health)이 HEALTH_CMD 를 넘겨준다. 직접 모듈로 실행했다면
+    현재 인터프리터에 맞춰 만든다 — macOS 에는 `python` 이 없고 `python3`
+    만 있어서, 문구에 `python` 이라고 적어두면 그대로 따라 쳤을 때 실패한다.
+    """
+    override = os.environ.get("HEALTH_CMD")
+    if override:
+        return override
+    exe = "python3" if sys.version_info[0] == 3 else "python"
+    return f"{exe} -m health"
 
 
 def _today() -> str:
@@ -159,7 +174,7 @@ def cmd_init(args, store: Store) -> int:
     exists = store.profile_path.exists()
     if exists and not (args.force or args.interactive):
         print(f"프로필이 이미 있습니다: {store.profile_path}")
-        print("내용을 채우려면: python -m health init --interactive")
+        print(f"내용을 채우려면: {cmd_name()} init --interactive")
         return 1
 
     p = store.load_profile() if exists else Profile()
@@ -175,10 +190,10 @@ def cmd_init(args, store: Store) -> int:
     print(f"\n저장: {store.profile_path}")
     if p.reviewed_at:
         print(f"매일 기록할 항목 {len(p.tracked())}개: {', '.join(p.tracked())}")
-        print("\n다음: python -m health checkin")
+        print(f"\n다음: {cmd_name()} checkin")
     else:
         print("→ 나이·기저질환·복약·금기·목표를 채워야 합니다.")
-        print("   대화형으로: python -m health init --interactive")
+        print(f"   대화형으로: {cmd_name()} init --interactive")
     return 0
 
 
@@ -229,7 +244,7 @@ def cmd_checkin(args, store: Store) -> int:
     print(f"\n체크인 — {d}")
     if not profile.reviewed_at:
         print("⚠ 프로필이 아직 검토되지 않았습니다. 안전 경계 없이 조언이 나갑니다.")
-        print("  먼저: python -m health init --interactive\n")
+        print(f"  먼저: {cmd_name()} init --interactive\n")
 
     try:
         rec, seconds, filled = ck.run(rec, profile.tracked())
@@ -298,7 +313,7 @@ def cmd_status(args, store: Store) -> int:
             bool(profile.reviewed_at),
             "프로필 검토",
             f"검토 {profile.reviewed_at[:10]}" if profile.reviewed_at
-            else "미검토 — python -m health init --interactive",
+            else f"미검토 — {cmd_name()} init --interactive",
         ),
         (
             len(tracked) <= 5,
@@ -313,7 +328,7 @@ def cmd_status(args, store: Store) -> int:
         (
             None if median is None else median <= 90,
             "체크인 소요 시간",
-            "측정된 체크인 없음 — python -m health checkin"
+            f"측정된 체크인 없음 — {cmd_name()} checkin"
             if median is None else f"중앙값 {median:.0f}초 (기준 90초)",
         ),
     ]

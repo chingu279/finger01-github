@@ -16,8 +16,8 @@ description: 기간별 건강 리포트를 생성한다. 월간 리포트, 진�
 
 ## 데이터 수집
 ```bash
-python -m health weekly --date <각 주의 마지막 날>   # 주별로 반복
-python -m health score --json --date <날짜>
+./health weekly --date <각 주의 마지막 날>
+./health score --json --date <날짜>
 ```
 집계가 더 필요하면 `scripts/analysis/` 에 스크립트를 작성해 실행한다. 암산 금지.
 

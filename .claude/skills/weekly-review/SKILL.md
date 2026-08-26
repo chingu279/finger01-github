@@ -9,7 +9,7 @@ description: 주간 건강 회고 — 지난 주 결산, 개입 효과 판정, �
 
 ## 1. 팩트 수집
 ```bash
-python -m health weekly
+./health weekly
 ```
 
 ## 2. 지난 주 권고 확인
@@ -20,7 +20,7 @@ tail -50 data/events.jsonl
 
 ## 3. 진행 중인 실험 확인
 ```bash
-python -c "import sys;sys.path.insert(0,'src');from health.store import Store;import json;print(json.dumps(Store().load_experiments(),ensure_ascii=False,indent=2))"
+python3 -c "import sys;sys.path.insert(0,'src');from health.store import Store;import json;print(json.dumps(Store().load_experiments(),ensure_ascii=False,indent=2))"
 ```
 종료일이 지난 실험은 `experiment-designer` 에게 판정을 맡긴다.
 
@@ -40,6 +40,6 @@ python -c "import sys;sys.path.insert(0,'src');from health.store import Store;im
 ## 6. 시스템 변경을 실제로 반영할 때
 사용자 승인 후 코드를 고치고, **반드시 회귀 테스트를 함께 추가**한다:
 ```bash
-python -m pytest tests -q
+python3 -m pytest tests -q
 ```
 테스트 없는 안전 규칙 변경은 머지하지 않는다.

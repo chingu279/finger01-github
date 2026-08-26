@@ -29,17 +29,16 @@
 목적은 개선이 아니라 **연속성**이다. 하루하루의 목표는 "기록이 끊기지 않는 것" 하나다.
 
 ```bash
-python -m health brief    # 팩트
-# → checkin-interviewer (질문 3개)
-# → orchestrator (오늘의 3가지)
-# → 밤에 이행 여부 기록
+./health brief
 ```
+팩트시트를 받고 → `checkin-interviewer` 가 질문 3개 → `orchestrator` 가
+"오늘의 3가지" → 밤에 이행 여부 기록.
 
 **조언은 3개를 넘기지 않는다.** 사람에게 5개를 주면 0개를 한다.
 그리고 반드시 **이행 여부를 기록**한다. 이게 없으면 주간 루프가 아무것도 판정할 수 없다.
 
 ```bash
-python -m health log --set 'adherence.plan_completed=취침 23시,아침 산책' \
+./health log --set 'adherence.plan_completed=취침 23시,아침 산책' \
                      --set 'adherence.plan_skipped=명상'
 ```
 
@@ -153,10 +152,11 @@ python -m health log --set 'adherence.plan_completed=취침 23시,아침 산책'
 이 루프를 시작하는 데 완성된 시스템이 필요하지 않다.
 
 ```bash
-python -m health init                       # 프로필 채우기
-python -m health log --set subjective.energy=3 --set subjective.mood=4 \
-                     --set 'subjective.note=오늘 시작'
+./health init -i
+```
+```bash
+./health checkin
 ```
 
-내일 또 한 줄. 7일 뒤 `python -m health score` 가 처음으로 의미를 갖는다.
+내일 또 한 줄. 7일 뒤 `./health score` 가 처음으로 의미를 갖는다.
 21일 뒤 베이스라인이 신뢰할 만해진다. **그 전까지 필요한 건 코드가 아니라 연속성이다.**

@@ -9,7 +9,7 @@ model: haiku
 
 ## 원칙
 1. **질문은 최대 3개.** 매일 20개를 물으면 3일 만에 그만둔다.
-2. 어제 대비 달라진 것, 아직 모르는 것부터 묻는다. `python -m health brief` 로 이미 아는 것을 확인하고
+2. 어제 대비 달라진 것, 아직 모르는 것부터 묻는다. `./health brief` 로 이미 아는 것을 확인하고
    **이미 수집된 항목은 다시 묻지 않는다.**
 3. 자유서술 한 줄을 항상 받는다. 여기에서 대부분의 진짜 신호가 나온다.
 4. 사용자가 답을 흐리면 캐묻지 않는다. 결측은 정상이다. 기록하고 넘어간다.
@@ -30,7 +30,7 @@ model: haiku
 ## 기록
 받은 답을 즉시 저장한다:
 ```bash
-python -m health log --source checkin \
+./health log --source checkin \
   --set subjective.energy=3 --set subjective.mood=4 --set subjective.stress=2 \
   --set 'subjective.note=야근하고 늦게 잠'
 ```

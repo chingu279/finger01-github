@@ -2,7 +2,7 @@
 name = "health-agent"
 version = "0.1.0"
 description = "개인 건강 관리 멀티에이전트 시스템 — 결정적 코어 + Claude Code 에이전트"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 dependencies = []          # 코어는 표준 라이브러리만 쓴다. 어디서나 돌아가야 한다.
 
 [project.optional-dependencies]

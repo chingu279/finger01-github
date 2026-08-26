@@ -1,0 +1,49 @@
+#!/bin/sh
+# 저장소 어디서든 `./health <명령>` 으로 실행하기 위한 얇은 진입점.
+#
+# 왜 필요한가: macOS 에는 `python` 이 없고 `python3` 만 있다. 그리고
+# PYTHONPATH 를 매번 export 하게 만들면 새 터미널을 열 때마다 걸린다.
+# 매일 써야 하는 도구에서 그런 마찰은 곧 기록 중단으로 이어진다.
+set -e
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# PYTHON 환경변수로 인터프리터를 지정할 수 있다 (pyenv, conda 등).
+if [ -n "${PYTHON:-}" ]; then
+    py=$PYTHON
+else
+    py=""
+    for candidate in python3 python3.13 python3.12 python3.11 python3.10 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            py=$candidate
+            break
+        fi
+    done
+fi
+
+if [ -z "$py" ]; then
+    echo "Python 을 찾지 못했습니다." >&2
+    echo "  macOS:  brew install python3   (또는 Xcode Command Line Tools)" >&2
+    echo "  이미 설치했다면:  PYTHON=/전체/경로/python3 ./health $*" >&2
+    exit 127
+fi
+
+# 3.9 미만은 타입 문법 때문에 임포트 단계에서 죽는다. 스택트레이스 대신
+# 무엇을 해야 하는지 알려준다.
+if ! "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'; then
+    detected=$("$py" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')
+    echo "Python 3.9 이상이 필요합니다 (현재 $py = $detected)." >&2
+    echo "  macOS:  brew install python3" >&2
+    exit 1
+fi
+
+# CLI 가 안내 문구에 쓸 호출 이름. 사용자가 실제로 친 명령과 문서의 명령이
+# 어긋나면 그 안내는 도움이 아니라 함정이 된다.
+case "$0" in
+    /*) invoked="$0" ;;
+    *)  invoked="./$(basename -- "$0")" ;;
+esac
+
+HEALTH_CMD="$invoked" \
+PYTHONPATH="$here/src${PYTHONPATH:+:$PYTHONPATH}" \
+exec "$py" -m health "$@"

@@ -11,7 +11,7 @@ model: sonnet
 1. 파일 포맷을 먼저 확인한다(`head`, `wc -l`). 통째로 읽어 컨텍스트를 태우지 않는다.
 2. 변환 스크립트를 `scripts/ingest_<소스>.py` 로 **작성**한다. 손으로 값을 옮기지 않는다.
    같은 소스를 다음 달에도 넣어야 한다.
-3. 스크립트는 `python -m health log --json` 을 호출하거나 `health.store.Store.upsert()` 를 쓴다.
+3. 스크립트는 `./health log --json` 을 호출하거나 `health.store.Store.upsert()` 를 쓴다.
    `upsert` 는 병합이므로 기존 수기 기록을 지우지 않는다.
 4. 반드시 `--source` 태그를 남긴다(`apple-health`, `fitbit`, ...).
 

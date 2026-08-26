@@ -6,7 +6,7 @@
 
 1. **건강 데이터를 커밋하지 않는다.** `data/**` 는 `.gitignore` 대상이다.
    이 줄을 지우거나 예외를 추가하지 않는다. 커밋 전 `git status --short` 로 확인한다.
-2. **숫자를 계산하지 않는다.** `python -m health brief` / `score --json` 의 출력을 인용한다.
+2. **숫자를 계산하지 않는다.** `./health brief` / `score --json` 의 출력을 인용한다.
    추가 집계가 필요하면 스크립트를 작성해 실행한다. 암산 결과는 신뢰할 수 없다.
 3. **트리아지 판정을 낮추지 않는다.** `triage.py` 의 심각도는 에이전트가 완화할 수 없다. 상향만 가능하다.
 4. **진단하지 않는다.** "~일 수 있으니 확인이 필요하다"까지가 한계다.
@@ -22,8 +22,9 @@
 - EMERGENCY 규칙은 오탐(경보 피로)을 이유로 완화하지 않는다. 미탐이 훨씬 비싸다.
 - 규칙 완화 시 근거를 커밋 메시지에 남긴다.
 
+커밋 전에는 항상:
 ```bash
-python -m pytest tests -q     # 커밋 전 항상
+python3 -m pytest tests -q
 ```
 
 ## 코드 규약
@@ -44,12 +45,16 @@ python -m pytest tests -q     # 커밋 전 항상
 
 ## 자주 쓰는 명령
 
-```bash
-export PYTHONPATH=src
-python -m health brief            # 일일 팩트시트
-python -m health score --json     # 준비도
-python -m health triage --json    # 레드플래그 (종료코드=심각도)
-python -m health weekly           # 주간 팩트시트
-python -m health seed --days 30   # 데모 데이터 (합성. 실제 값 아님)
-python -m pytest tests -q
-```
+저장소 루트의 `./health` 진입점을 쓴다. `python` 을 직접 부르지 않는다 —
+macOS 에는 `python` 이 없어서 문서의 명령을 그대로 따라 치면 실패한다.
+
+| 명령 | 하는 일 |
+|---|---|
+| `./health checkin` | 대화형 일일 체크인 |
+| `./health status` | Phase 0 게이트 판정 |
+| `./health brief` | 일일 팩트시트 (에이전트 입력) |
+| `./health score --json` | 준비도 |
+| `./health triage --json` | 레드플래그. 종료코드가 심각도 |
+| `./health weekly` | 주간 팩트시트 |
+| `./health seed --days 30` | 데모 데이터 (합성. 실제 값 아님) |
+| `python3 -m pytest tests -q` | 테스트 |

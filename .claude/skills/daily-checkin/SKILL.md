@@ -7,7 +7,7 @@ description: 오늘의 건강 체크인을 진행하고 브리핑을 받는다. 
 
 ## 1. 현재 상태 확인
 ```bash
-python -m health brief
+./health brief
 ```
 브리핑을 읽고 **이미 채워진 항목은 다시 묻지 않는다.**
 
@@ -21,7 +21,7 @@ python -m health brief
 
 ## 4. 기록
 ```bash
-python -m health log --source checkin \
+./health log --source checkin \
   --set subjective.energy=<1-5> \
   --set subjective.mood=<1-5> \
   --set subjective.stress=<1-5> \
@@ -31,7 +31,7 @@ python -m health log --source checkin \
 
 ## 5. 브리핑 전달
 ```bash
-python -m health score && python -m health triage
+./health score && ./health triage
 ```
 `health-orchestrator` 형식으로 답한다:
 - 상태 한 줄 (준비도 · 밴드 · 가장 큰 변화)

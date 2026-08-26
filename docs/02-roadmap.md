@@ -15,7 +15,7 @@
 
 **1. 프로필을 채운다 (5분, 한 번만)**
 ```bash
-python -m health init -i
+./health init -i
 ```
 나이 · 성별 · 키 · **기저질환 · 복약 · 알레르기 · 금기 · 목표 · 비상연락처**를 묻는다.
 이 값들이 모든 조언의 안전 경계다. 비워두면 시스템이 위험한 조언을 할 수 있다.
@@ -53,13 +53,16 @@ python -m health init -i
 
 **3. 매일 체크인한다**
 ```bash
-python -m health checkin      # 리커트는 키 한 번. 이미 채워진 항목은 묻지 않는다
-python -m health status       # 게이트 통과 여부
+./health checkin
+```
+리커트는 키 한 번. 이미 채워진 항목은 묻지 않는다.
+```bash
+./health status
 ```
 체크인은 자기 소요 시간을 `events.jsonl` 에 기록한다 —
 **측정하지 않는 목표는 지켜지지 않기 때문이다.** 90초를 넘기면 그 자리에서 경고한다.
 
-### 완료 조건 (`python -m health status` 가 판정한다)
+### 완료 조건 (`./health status` 가 판정한다)
 - [ ] 프로필을 실제로 검토했다 (`reviewed_at`)
 - [ ] 측정 항목이 5개 이하다
 - [ ] 7일 연속 기록에 성공했다

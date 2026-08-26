@@ -433,3 +433,94 @@ def test_checkin_does_not_reask_a_filled_composite_field():
     rec, seconds, filled = run(rec, ["vitals.bp"])   # 입력을 안 받아도 통과해야 한다
     assert filled == 0
     assert rec.vitals.bp_systolic == 120
+
+
+# ── 실행 진입점 (이식성) ────────────────────────────────────────
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+def test_shim_exists_and_is_executable():
+    shim = REPO / "health"
+    assert shim.exists(), "저장소 루트에 ./health 진입점이 있어야 합니다"
+    assert shim.stat().st_mode & 0o111, "./health 에 실행 권한이 없습니다"
+
+
+def test_shim_is_valid_posix_sh():
+    """zsh/bash/dash 어디서 돌지 모른다. bashism 이 들어가면 사용자 머신에서 죽는다."""
+    import subprocess
+
+    r = subprocess.run(["sh", "-n", str(REPO / "health")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_docs_never_tell_the_user_to_run_bare_python():
+    """macOS 에는 `python` 이 없다. 문서의 명령을 그대로 따라 치면 실패한다
+    — 실제로 이 저장소를 처음 클론한 사용자가 여기서 막혔다."""
+    import re
+
+    offenders = []
+    for f in [REPO / "README.md", REPO / "CLAUDE.md",
+              *(REPO / "docs").glob("*.md"), *(REPO / ".claude").rglob("*.md")]:
+        in_code = False
+        for i, line in enumerate(f.read_text("utf-8").splitlines(), 1):
+            if line.lstrip().startswith("```"):
+                in_code = not in_code
+                continue
+            if not in_code:
+                continue          # 산문에서 단어로 언급하는 것은 문제가 아니다
+            # `python3` 과 `pythonic` 은 통과, 맨 `python` 호출만 잡는다
+            if re.search(r"(?<![\w.3-])python(?![\w3])", line):
+                offenders.append(f"{f.relative_to(REPO)}:{i}: {line.strip()}")
+    assert not offenders, "복사해 붙이면 macOS 에서 실패하는 명령:\n" + "\n".join(offenders)
+
+
+def test_cmd_name_matches_how_it_was_invoked(monkeypatch):
+    """안내 문구가 사용자가 실제로 친 명령과 어긋나면 도움이 아니라 함정이다."""
+    from health.cli import cmd_name
+
+    monkeypatch.setenv("HEALTH_CMD", "./health")
+    assert cmd_name() == "./health"
+
+    monkeypatch.delenv("HEALTH_CMD", raising=False)
+    assert cmd_name() == "python3 -m health"     # 맨 python 을 안내하지 않는다
+
+
+def test_core_stays_importable_on_python_39():
+    """macOS 기본 python3 는 3.9 다. 3.10 전용 문법이 들어가면 임포트 단계에서 죽는다."""
+    import ast
+
+    for f in sorted((REPO / "src").rglob("*.py")):
+        ast.parse(f.read_text("utf-8"), filename=str(f), feature_version=(3, 9))
+
+
+def _bash_block_lines():
+    """문서의 bash/sh 코드블록 안 명령 줄만 뽑는다."""
+    import re
+
+    files = [REPO / "README.md", REPO / "CLAUDE.md",
+             *(REPO / "docs").glob("*.md"), *(REPO / ".claude").rglob("*.md")]
+    for f in files:
+        lang = None
+        for i, line in enumerate(f.read_text("utf-8").splitlines(), 1):
+            fence = re.match(r"\s*```(\w*)", line)
+            if fence:
+                lang = None if lang is not None else fence.group(1)
+                continue
+            if lang in ("bash", "sh", "shell") and line.strip():
+                yield f, i, line
+
+
+def test_shell_blocks_have_no_comments():
+    """zsh 는 대화형 라인에서 `#` 를 주석으로 치지 않는다(interactive_comments 기본 off).
+    주석이 붙은 명령을 붙여넣으면 `#` 와 그 뒤 단어들이 인자로 넘어가 실패한다
+    — 이 저장소를 처음 클론한 사용자가 정확히 여기서 막혔다."""
+    import re
+
+    offenders = [
+        f"{f.relative_to(REPO)}:{i}: {line.strip()}"
+        for f, i, line in _bash_block_lines()
+        if re.search(r"(^\s*#)|(\S\s+#\s)", line)
+    ]
+    assert not offenders, (
+        "붙여넣으면 zsh 에서 깨지는 주석:\n" + "\n".join(offenders))

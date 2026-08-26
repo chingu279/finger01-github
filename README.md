@@ -32,12 +32,27 @@ LLM은 맥락에 따라 출력이 흔들린다. "흉통 + 식은땀"을 100번 �
 ```bash
 git clone https://github.com/chingu279/finger01-github.git
 cd finger01-github
-export PYTHONPATH=src          # 또는: pip install -e .
-
-python -m health init -i       # 프로필을 대화형으로 채운다 (5분, 한 번만)
-python -m health checkin       # 매일 이것 하나. 90초 안에 끝나야 한다
-python -m health status        # Phase 0 게이트 통과 여부
+./health init -i
 ```
+```bash
+./health checkin
+```
+```bash
+./health status
+```
+
+`./health` 는 저장소 루트의 셸 진입점이다. `PYTHONPATH` 를 export 할 필요도,
+`python` 인지 `python3` 인지 신경 쓸 필요도 없다 — macOS 처럼 `python` 이
+없는 환경에서도 알아서 찾는다. Python 3.9 이상이면 동작한다.
+
+| 명령 | 언제 |
+|---|---|
+| `./health init -i` | 처음 한 번. 프로필과 추적 항목을 정한다 (5분) |
+| `./health checkin` | **매일 이것 하나.** 90초 안에 끝나야 한다 |
+| `./health status` | Phase 0 게이트 통과 여부 |
+
+인터프리터를 직접 지정하려면 `PYTHON=/path/to/python3 ./health checkin`.
+`pip install -e .` 를 하면 어느 디렉터리에서든 `health` 로 부를 수 있다.
 
 `init -i` 는 목표와 웨어러블 보유 여부로 매일 물을 항목을 제안한다 —
 스마트워치가 있으면 수면·심박은 자동 수집에 맡기고 묻지 않는다.
@@ -53,14 +68,15 @@ python -m health status        # Phase 0 게이트 통과 여부
 ```
 
 ### 그 밖의 명령
-```bash
-python -m health score          # 준비도 0~100 + 기여 요인
-python -m health triage         # 레드플래그 (종료코드 = 심각도 0~3)
-python -m health brief          # 에이전트에 먹일 일일 팩트시트
-python -m health weekly         # 주간 팩트시트
-python -m health seed --days 30 # 데모용 합성 데이터 (실제 값 아님)
-python -m health log --set vitals.weight_kg=70.2   # 단건 기록/보정
-```
+
+| 명령 | 하는 일 |
+|---|---|
+| `./health score` | 준비도 0~100 + 기여 요인 |
+| `./health triage` | 레드플래그. 종료코드가 심각도(0~3) |
+| `./health brief` | 에이전트에 먹일 일일 팩트시트 |
+| `./health weekly` | 주간 팩트시트 |
+| `./health seed --days 30` | 데모용 합성 데이터 (실제 값 아님) |
+| `./health log --set vitals.weight_kg=70.2` | 단건 기록·보정 |
 
 ## 데이터는 어디에 사는가
 
@@ -72,9 +88,11 @@ python -m health log --set vitals.weight_kg=70.2   # 단건 기록/보정
 ```bash
 export HEALTH_DATA_DIR=~/Vault/health-data
 ```
-백업은 평문 클라우드 동기화 폴더가 아니라 암호화 아카이브로 한다:
+
+백업은 평문 클라우드 동기화 폴더가 아니라 암호화 아카이브로 한다
+(`age` 대신 `gpg -c` 도 된다):
 ```bash
-tar czf - "$HEALTH_DATA_DIR" | age -p > health-$(date +%F).tar.gz.age
+tar czf - "$HEALTH_DATA_DIR" | age -p > health-backup.tar.gz.age
 ```
 
 ## 에이전트 14개
@@ -120,7 +138,7 @@ data/                개인 데이터 — .gitignore로 전부 제외됨
 ## 개발
 
 ```bash
-python -m pytest tests -q
+python3 -m pytest tests -q
 ```
 
 `src/health/triage.py` 를 고칠 때는 **반드시 회귀 테스트를 함께 추가**한다.

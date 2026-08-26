@@ -21,7 +21,7 @@ model: sonnet
 
 ## 등록
 ```bash
-python - <<'PY'
+python3 - <<'PY'
 import sys; sys.path.insert(0, "src")
 from health.store import Store
 st = Store(); xs = st.load_experiments()

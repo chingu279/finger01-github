@@ -50,7 +50,7 @@ LLM은 프롬프트·맥락·대화 길이에 따라 출력이 흔들린다. "�
 | `ROUTINE` | 수일 내 진료 권유 | 조언과 함께 전달 |
 | `MONITOR` | 관찰 | 추세 기록 |
 
-`python -m health triage` 는 심각도를 **종료 코드(0~3)**로 반환한다. 훅·스크립트에서 분기할 수 있다.
+`./health triage` 는 심각도를 **종료 코드(0~3)**로 반환한다. 훅·스크립트에서 분기할 수 있다.
 
 ## 4. 현재 구현된 레드플래그
 
@@ -119,15 +119,17 @@ LLM은 프롬프트·맥락·대화 길이에 따라 출력이 흔들린다. "�
 
 ### 커밋 전 확인
 ```bash
-git status --short          # data/ 아래 파일이 보이면 안 된다
+git status --short
 git diff --cached --stat
 ```
+`data/` 아래 파일이 하나라도 보이면 커밋하지 않는다.
 실수로 스테이징된 적이 있다면 `.gitignore` 만으로는 부족하다 — 이미 추적 중인 파일은
 `git rm --cached` 로 빼야 한다.
 
 ### 백업
+`age` 또는 `gpg -c` 로 암호화한다:
 ```bash
-tar czf - data | age -p > health-backup-$(date +%F).tar.gz.age   # age 또는 gpg
+tar czf - data | age -p > health-backup.tar.gz.age
 ```
 평문 클라우드 동기화 폴더(구글 드라이브, 아이클라우드)에 `data/` 를 그대로 두지 않는다.
 
@@ -148,6 +150,7 @@ tar czf - data | age -p > health-backup-$(date +%F).tar.gz.age   # age 또는 gp
 4. `reflection-agent` 가 오탐을 이유로 임계값 상향을 제안하더라도,
    **EMERGENCY 규칙은 오탐을 이유로 완화하지 않는다.** 경보 피로보다 미탐이 훨씬 비싸다.
 
+커밋 전에는 항상:
 ```bash
-python -m pytest tests -q     # 커밋 전 항상
+python3 -m pytest tests -q
 ```
