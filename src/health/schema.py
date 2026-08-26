@@ -20,12 +20,24 @@ LIKERT_FIELDS = ("mood", "energy", "stress", "soreness", "focus")
 
 
 def _clean(d: dict[str, Any]) -> dict[str, Any]:
-    """None 과 빈 컬렉션을 제거해 저장 파일을 사람이 읽을 수 있게 유지."""
+    """None 과 빈 컬렉션을 제거해 저장 파일을 사람이 읽을 수 있게 유지.
+
+    정리한 뒤에도 비어 있는 하위 블록은 통째로 뺀다 — `"vitals": {}` 가
+    스무 줄씩 쌓이면 파일을 눈으로 훑을 수 없다.
+    """
     out: dict[str, Any] = {}
     for k, v in d.items():
         if v is None or v == [] or v == {}:
             continue
-        out[k] = _clean(v) if isinstance(v, dict) else v
+        if isinstance(v, dict):
+            nested = _clean(v)
+            if not nested:
+                continue
+            out[k] = nested
+        elif isinstance(v, list) and v and isinstance(v[0], dict):
+            out[k] = [_clean(item) for item in v]     # 운동 목록 등
+        else:
+            out[k] = v
     return out
 
 
@@ -46,7 +58,11 @@ class Sleep:
 @dataclass
 class Vitals:
     resting_hr: float | None = None      # bpm, 기상 직후
-    hrv_rmssd_ms: float | None = None    # 부교감 활성 대리지표
+    hrv_rmssd_ms: float | None = None    # 부교감 활성 대리지표 (Oura/Whoop/폴라)
+    hrv_sdnn_ms: float | None = None     # Apple Health 가 주는 유일한 HRV.
+    #  rMSSD 와 SDNN 은 다른 값이다. SDNN 은 측정 구간 전체의 변동을 보므로
+    #  보통 rMSSD 보다 크고, 두 값을 한 칸에 섞으면 베이스라인이 조용히
+    #  망가진다 — 값이 튄 게 아니라 기기가 바뀐 것뿐인데 알 길이 없어진다.
     spo2_pct: float | None = None
     body_temp_c: float | None = None
     bp_systolic: float | None = None
@@ -179,6 +195,15 @@ class DailyRecord:
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
+
+    def is_empty(self) -> bool:
+        """date/sources 말고는 아무 값도 없는 레코드.
+
+        빈 파일이 남으면 `status` 의 연속 기록일이 부풀어 게이트가
+        거짓으로 통과한다 — 기록하지 않은 날을 기록한 날로 세게 된다.
+        """
+        payload = self.to_dict()
+        return not (set(payload) - {"date", "sources"})
 
     # ── 편의 접근자 ───────────────────────────────────────────
     def get_path(self, path: str) -> Any:

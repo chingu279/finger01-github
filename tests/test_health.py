@@ -524,3 +524,156 @@ def test_shell_blocks_have_no_comments():
     ]
     assert not offenders, (
         "붙여넣으면 zsh 에서 깨지는 주석:\n" + "\n".join(offenders))
+
+
+# ── 웨어러블 적재 (Apple Health) ────────────────────────────────
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "apple_export_sample.xml"
+
+
+@pytest.fixture(scope="module")
+def apple():
+    from health.ingest import parse_apple
+
+    return parse_apple(FIXTURE)
+
+
+def test_spo2_fraction_is_converted_to_percent(apple):
+    """Apple 은 unit="%" 에 0.97 같은 분율을 넣는다. 그대로 저장하면
+    SpO2 0.97% 가 되어 트리아지가 매일 응급을 띄운다."""
+    recs, _ = apple
+    assert recs["2026-08-25"].vitals.spo2_pct == 97.0
+
+
+def test_hrv_goes_to_sdnn_not_rmssd(apple):
+    """Apple 이 주는 HRV 는 SDNN 이다. rMSSD 칸에 넣으면 기기를 바꿨을 때
+    베이스라인이 조용히 망가진다."""
+    recs, _ = apple
+    v = recs["2026-08-25"].vitals
+    assert v.hrv_sdnn_ms == 65.0          # 62, 68 의 평균
+    assert v.hrv_rmssd_ms is None
+
+
+def test_steps_are_deduplicated_across_sources(apple):
+    """아이폰과 애플워치가 같은 걸음을 각각 기록한다. 합치면 두 배가 된다."""
+    recs, _ = apple
+    assert recs["2026-08-25"].activity.steps == 7700     # 15,000 이 아니다
+
+
+def test_pounds_are_converted_to_kilograms(apple):
+    recs, _ = apple
+    assert recs["2026-08-25"].vitals.weight_kg == 70.0   # 154.3 lb
+
+
+def test_sleep_across_midnight_belongs_to_the_wake_day(apple):
+    """8/24 23:20 취침 → 8/25 06:45 기상. 사람은 "오늘 몇 시간 자고
+    일어났나"로 컨디션을 판단한다."""
+    recs, _ = apple
+    assert "2026-08-24" not in recs
+    sleep = recs["2026-08-25"].sleep
+    assert sleep.bedtime == "23:20" and sleep.waketime == "06:45"
+
+
+def test_nap_is_not_counted_as_night_sleep(apple):
+    """25분 낮잠을 밤잠에 더하면 총 수면이 부풀고 수면부채가 과소평가된다."""
+    recs, _ = apple
+    assert recs["2026-08-25"].sleep.total_min == 415.0   # 낮잠 25분 제외
+
+
+def test_sleep_stages_and_efficiency(apple):
+    recs, _ = apple
+    s = recs["2026-08-25"].sleep
+    assert s.deep_min == 70.0 and s.rem_min == 72.0
+    assert s.awakenings == 1
+    assert s.efficiency_pct == pytest.approx(92.2, abs=0.1)
+    assert s.latency_min == 22.0
+
+
+def test_out_of_range_values_are_rejected_and_reported(apple):
+    """웨어러블 오작동 값 하나가 28일 베이스라인을 통째로 민다.
+    조용히 버리지도 않는다 — 무엇이 왜 빠졌는지 알아야 고칠 수 있다."""
+    recs, rep = apple
+    assert any("410" in r for r in rep.rejected)
+    assert "2026-08-23" not in recs
+
+
+def test_a_day_whose_values_were_all_rejected_creates_no_record(apple):
+    """빈 파일이 남으면 status 의 연속 기록일이 부풀어 게이트가
+    거짓으로 통과한다."""
+    recs, _ = apple
+    assert all(not r.is_empty() for r in recs.values())
+
+
+def test_gaps_are_reported(apple):
+    _, rep = apple
+    assert any("2026-08-23" in g for g in rep.gaps)
+
+
+def test_workout_is_imported(apple):
+    recs, _ = apple
+    w = recs["2026-08-25"].activity.workouts[0]
+    assert w.type == "running" and w.duration_min == 46.5 and w.distance_km == 8.2
+
+
+def test_non_numeric_records_are_skipped(apple):
+    """심전도 분류 같은 문자열 값 레코드에서 죽으면 안 된다."""
+    _, rep = apple
+    assert rep.records_seen > 0        # 파싱이 끝까지 갔다
+
+
+def test_import_does_not_erase_manual_entries(tmp_path):
+    """웨어러블이 아침에 수면을 넣고 저녁에 체크인이 기분을 넣는다.
+    덮어쓰기면 한쪽이 지워진다."""
+    from health.ingest import parse_apple
+
+    st = Store(tmp_path)
+    manual = make(1)
+    manual.date = "2026-08-25"
+    manual.subjective.energy = 4
+    manual.subjective.note = "종아리 뻐근"
+    st.upsert(manual)
+
+    recs, _ = parse_apple(FIXTURE)
+    st.upsert(recs["2026-08-25"])
+
+    back = st.load("2026-08-25")
+    assert back.subjective.energy == 4          # 수기 기록이 남았다
+    assert back.subjective.note == "종아리 뻐근"
+    assert back.sleep.total_min == 415.0        # 웨어러블 값도 들어왔다
+
+
+def test_empty_record_never_creates_a_file(tmp_path):
+    st = Store(tmp_path)
+    assert st.upsert(make(1)) is None
+    assert st.all_dates() == []
+
+
+def test_readiness_uses_sdnn_when_rmssd_is_absent():
+    """애플워치 사용자는 SDNN 만 갖는다. 그것 때문에 준비도의 가장 큰
+    기여 지표가 통째로 빠지면 안 된다."""
+    base = dict(vitals__resting_hr=56, sleep__total_min=445, subjective__energy=3)
+    hist = [make(i + 1, **base, vitals__hrv_sdnn_ms=60 + (i % 5) - 2) for i in range(21)]
+    r = rd.compute(hist, make(25, **base, vitals__hrv_sdnn_ms=60), Profile())
+    assert any("SDNN" in label for label, _, _ in r.contributors)
+    assert r.confidence >= 0.7
+
+
+def test_only_one_hrv_metric_is_counted():
+    """둘 다 있으면 같은 신호를 두 번 세게 된다."""
+    base = dict(vitals__resting_hr=56, sleep__total_min=445, subjective__energy=3)
+    hist = [make(i + 1, **base, vitals__hrv_rmssd_ms=48 + (i % 4),
+                 vitals__hrv_sdnn_ms=60 + (i % 4)) for i in range(21)]
+    r = rd.compute(hist, make(25, **base, vitals__hrv_rmssd_ms=48,
+                              vitals__hrv_sdnn_ms=60), Profile())
+    hrv_used = [label for label, _, _ in r.contributors if "HRV" in label]
+    assert hrv_used == ["HRV(rMSSD)"]           # rMSSD 우선, 하나만
+
+
+def test_confidence_can_reach_one_with_a_single_hrv_source():
+    """HRV 항목이 둘이라고 분모가 커지면 신뢰도가 1에 닿지 못한다."""
+    full = dict(vitals__resting_hr=56, sleep__total_min=445, sleep__efficiency_pct=90,
+                subjective__energy=3, subjective__soreness=2, subjective__stress=2,
+                subjective__mood=3)
+    hist = [make(i + 1, **full, vitals__hrv_sdnn_ms=60 + (i % 5) - 2) for i in range(21)]
+    r = rd.compute(hist, make(25, **full, vitals__hrv_sdnn_ms=60), Profile())
+    assert r.confidence == 1.0

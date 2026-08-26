@@ -25,6 +25,7 @@ from .schema import DailyRecord
 #   그래서 지표별로 '이 정도 변화는 의미 있다'는 최소 폭을 하한으로 둔다.
 TRACKED: list[tuple[str, str, int, float]] = [
     ("vitals.hrv_rmssd_ms", "HRV(rMSSD)", +1, 3.0),
+    ("vitals.hrv_sdnn_ms", "HRV(SDNN)", +1, 5.0),
     ("vitals.resting_hr", "안정시 심박", -1, 1.5),
     ("vitals.spo2_pct", "산소포화도", +1, 0.5),
     ("vitals.body_temp_c", "체온", 0, 0.2),

@@ -50,6 +50,7 @@ cd finger01-github
 | `./health init -i` | 처음 한 번. 프로필과 추적 항목을 정한다 (5분) |
 | `./health checkin` | **매일 이것 하나.** 90초 안에 끝나야 한다 |
 | `./health status` | Phase 0 게이트 통과 여부 |
+| `./health import <파일>` | 애플 건강 내보내기 적재 |
 
 인터프리터를 직접 지정하려면 `PYTHON=/path/to/python3 ./health checkin`.
 `pip install -e .` 를 하면 어느 디렉터리에서든 `health` 로 부를 수 있다.
@@ -77,6 +78,33 @@ cd finger01-github
 | `./health weekly` | 주간 팩트시트 |
 | `./health seed --days 30` | 데모용 합성 데이터 (실제 값 아님) |
 | `./health log --set vitals.weight_kg=70.2` | 단건 기록·보정 |
+
+## 애플워치 데이터 넣기
+
+아이폰 **건강** 앱 → 우상단 프로필 사진 → 맨 아래 **모든 건강 데이터 내보내기**
+→ 압축 파일을 맥으로 보내 압축 해제 → `apple_health_export/export.xml`
+
+```bash
+./health import ~/Downloads/apple_health_export/export.xml
+```
+
+먼저 `--dry-run` 을 붙이면 저장하지 않고 무엇이 들어올지만 보여준다.
+`--since 2026-08-01` 로 범위를 좁힐 수 있다 (전체 파일은 보통 수백 MB 다).
+
+수면·안정시심박·HRV·SpO₂·걸음·운동이 들어온다. 21일치만 있어도 준비도가
+`UNKNOWN` 에서 실제 점수로 바뀐다. `upsert` 는 병합이라 **수기로 기록한
+기분·통증·메모는 지워지지 않는다.**
+
+적재할 때 걸러내는 것들:
+- 아이폰과 애플워치가 각각 기록한 **걸음 중복** (합치면 두 배가 된다)
+- `unit="%"` 에 `0.97` 로 들어오는 **SpO₂ 분율** → 97%
+- 파운드로 기록된 체중 → kg
+- 생리학적 범위 밖의 오작동 값 (버리지 않고 보고한다)
+- 25분 낮잠을 밤잠에 더하는 것
+
+**Apple 이 주는 HRV 는 SDNN 이지 rMSSD 가 아니다.** 두 값은 스케일이 달라
+한 칸에 섞으면 기기를 바꿨을 때 베이스라인이 조용히 망가진다. 그래서
+`vitals.hrv_sdnn_ms` 로 따로 저장하고, 준비도는 가진 쪽 하나만 쓴다.
 
 ## 데이터는 어디에 사는가
 

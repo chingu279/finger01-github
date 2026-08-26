@@ -130,10 +130,16 @@ class Store:
         p.write_text(rec.to_json(), "utf-8")
         return p
 
-    def upsert(self, rec: DailyRecord) -> Path:
-        """부분 레코드를 기존 파일에 병합 저장. 수집 에이전트의 기본 쓰기 경로."""
+    def upsert(self, rec: DailyRecord) -> Path | None:
+        """부분 레코드를 기존 파일에 병합 저장. 수집 에이전트의 기본 쓰기 경로.
+
+        내용이 하나도 없으면 파일을 만들지 않는다. 빈 파일은 `status` 의
+        연속 기록일을 부풀려 게이트를 거짓으로 통과시킨다.
+        """
         existing = self.load(rec.date)
         merged = existing.merge(rec) if existing else rec
+        if merged.is_empty():
+            return None
         return self.save(merged)
 
     def history(self, end: str | None = None, days: int = 28) -> list[DailyRecord]:

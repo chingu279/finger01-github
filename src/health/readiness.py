@@ -18,8 +18,23 @@ from .schema import DailyRecord
 from .store import Profile
 
 # 지표별 가중치. 합이 1이 되도록 두되, 결측 시 재정규화한다.
+# HRV 는 기기에 따라 rMSSD 또는 SDNN 하나만 들어온다. 둘 다 가중치에
+# 넣으면 한쪽만 있는 사람은 그만큼 신뢰도가 깎이고, 둘 다 있는 사람은
+# 같은 신호를 두 번 세게 된다. 그래서 하나를 골라 쓴다.
+HRV_PATHS = ("vitals.hrv_rmssd_ms", "vitals.hrv_sdnn_ms")
+
+
+def max_weight() -> float:
+    """달성 가능한 최대 가중치 합. 신뢰도의 분모다.
+
+    HRV 두 항목 중 하나만 쓰이므로 단순 합을 쓰면 모든 지표가 다 있어도
+    신뢰도가 1에 닿지 못한다.
+    """
+    return sum(WEIGHTS.values()) - min(WEIGHTS[p] for p in HRV_PATHS)
+
 WEIGHTS: dict[str, float] = {
     "vitals.hrv_rmssd_ms": 0.26,     # 자율신경 회복의 가장 민감한 대리지표
+    "vitals.hrv_sdnn_ms": 0.26,      # rMSSD 가 없을 때의 대체 (둘 중 하나만 쓰인다)
     "vitals.resting_hr": 0.18,
     "sleep.total_min": 0.16,
     "sleep.efficiency_pct": 0.10,
@@ -86,7 +101,15 @@ def compute(
     used = 0.0
     contributors: list[tuple[str, float, float]] = []
 
+    # rMSSD 가 있으면 그것을, 없으면 SDNN 을 쓴다. rMSSD 쪽이 부교감
+    # 활성 지표로 더 확립돼 있어 우선한다.
+    hrv_in_use = next(
+        (p for p in HRV_PATHS if (metrics.get(p) and metrics[p].z is not None)), None
+    )
+
     for path, w in WEIGHTS.items():
+        if path in HRV_PATHS and path != hrv_in_use:
+            continue
         m = metrics.get(path)
         if m is None or m.z is None:
             continue
@@ -124,7 +147,7 @@ def compute(
         score=round(score, 1),
         band=band,
         advice=advice,
-        confidence=round(used / sum(WEIGHTS.values()), 2),
+        confidence=round(min(1.0, used / max_weight()), 2),
         contributors=sorted(contributors, key=lambda c: c[2]),
     )
 
@@ -179,6 +202,11 @@ def _flag_missing(r: Readiness, history: Sequence[DailyRecord], profile: Profile
         seen = len(bl.series(history, path))
         if path not in expected and seen < MISSING_SEEN_THRESHOLD:
             continue                      # 수집한 적 없는 지표 — 경보 대상 아님
+        if path in HRV_PATHS and any(
+            len(bl.series(history, other)) >= MISSING_SEEN_THRESHOLD
+            for other in HRV_PATHS if other != path
+        ):
+            continue                      # 다른 쪽 HRV 가 들어오고 있다면 결측이 아니다
         if bl.missingness(history, path) > 0.5:
             r.flags.append(
                 f"데이터 결측: 최근 2주 '{label}' 절반 이상 비어있음 — 수집 경로 점검 필요"

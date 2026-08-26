@@ -357,6 +357,48 @@ def cmd_status(args, store: Store) -> int:
     return 0 if passed else 1
 
 
+def cmd_import(args, store: Store) -> int:
+    from pathlib import Path as _P
+
+    from . import ingest
+
+    src = _P(args.file)
+    if not src.exists():
+        print(f"파일이 없습니다: {src}", file=sys.stderr)
+        return 2
+
+    parser = ingest.PARSERS.get(args.source)
+    if parser is None:
+        print(f"지원하지 않는 소스: {args.source} "
+              f"(가능: {', '.join(ingest.PARSERS)})", file=sys.stderr)
+        return 2
+
+    size_mb = src.stat().st_size / 1e6
+    print(f"{src.name} ({size_mb:.0f}MB) 읽는 중… 큰 파일은 몇 분 걸립니다.")
+    records, rep = parser(src, since=args.since)
+
+    print()
+    print(rep.render())
+
+    if not records:
+        print("\n적재할 레코드가 없습니다. --since 를 확인하거나 내보내기 범위를 넓히세요.")
+        return 1
+
+    if args.dry_run:
+        print("\n--dry-run 이므로 저장하지 않았습니다.")
+        return 0
+
+    for rec in sorted(records.values(), key=lambda r: r.date):
+        store.upsert(rec)          # 병합이므로 수기 기록의 다른 필드는 남는다
+    store.log_event("import", args.source, {
+        "file": src.name, "days": rep.days,
+        "first": rep.first, "last": rep.last, "rejected": len(rep.rejected),
+    })
+    print(f"\n저장: {store.daily_dir}")
+    print("자동 수집된 항목은 다음 체크인에서 다시 묻지 않습니다.")
+    return 0
+
+
 def cmd_score(args, store: Store) -> int:
     d = args.date or _today()
     today = store.load(d)
@@ -479,6 +521,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--workout", action="append", metavar="종류:분:RPE")
     s.add_argument("--source", help="데이터 출처 태그 (예: apple-health, checkin)")
     s.set_defaults(func=cmd_log)
+
+    s = sub.add_parser("import", help="웨어러블 내보내기 파일 적재")
+    s.add_argument("file", help="예: ~/Downloads/apple_health_export/export.xml")
+    s.add_argument("--source", default="apple", help="기본: apple")
+    s.add_argument("--since", help="이 날짜 이후만 (YYYY-MM-DD)")
+    s.add_argument("--dry-run", action="store_true", help="저장하지 않고 보고만")
+    s.set_defaults(func=cmd_import)
 
     s = sub.add_parser("score", help="준비도 계산")
     s.add_argument("--date"); s.add_argument("--json", action="store_true")
