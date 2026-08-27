@@ -113,16 +113,22 @@ class HealthHandler(BaseHTTPRequestHandler):
         d = _today()
         profile = self.store.load_profile()
         rec = self.store.load_or_new(d)
+        y_date = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+        yesterday = self.store.load_or_new(y_date)
 
         fields, measurements = [], []
         for key in profile.tracked():
             p = ck.PROMPTS.get(key)
             if p is None:
                 continue
-            filled = all(rec.get_path(t) is not None for t in p.targets)
+            # 섭취 항목은 어제 레코드를 본다 — 아침에 답할 수 있는 것도,
+            # 그 값이 설명하는 수면도 어제 것이기 때문.
+            about_yesterday = ck.asks_about_yesterday(key)
+            src = yesterday if about_yesterday else rec
+            filled = all(src.get_path(t) is not None for t in p.targets)
             current = None
             if filled:
-                values = [rec.get_path(t) for t in p.targets]
+                values = [src.get_path(t) for t in p.targets]
                 current = "/".join(f"{v:g}" if isinstance(v, float) else str(v)
                                    for v in values)
             # 프롬프트 힌트는 CLI 와 공유한다. "(Enter=건너뜀)" 같은 터미널
@@ -132,6 +138,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 "key": key, "label": p.label, "kind": p.kind,
                 "hint": hint, "unit": p.unit,
                 "filled": filled, "current": current,
+                "about": "yesterday" if about_yesterday else "today",
             }
             # 측정값은 이미 채워져 있어도 화면에 남겨둔다 — 다시 잰 값으로
             # 고칠 수 있어야 하기 때문. 질문은 채워졌으면 다시 묻지 않는다.
@@ -150,6 +157,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
         return {
             "date": d,
+            "yesterday": y_date,
             "fields": fields,
             "measurements": measurements,
             "auto": auto,
@@ -163,6 +171,8 @@ class HealthHandler(BaseHTTPRequestHandler):
         values: dict[str, Any] = payload.get("values") or {}
 
         rec = self.store.load_or_new(d)
+        y_date = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+        yesterday = self.store.load_or_new(y_date)
         saved, rejected = 0, []
 
         for key, raw in values.items():
@@ -186,11 +196,15 @@ class HealthHandler(BaseHTTPRequestHandler):
                 rejected.append({"key": key, "reason": bad})
                 continue
 
-            p.apply(rec, value)
+            p.apply(yesterday if ck.asks_about_yesterday(key) else rec, value)
             saved += 1
 
         rec.sources = sorted(set(rec.sources) | {"checkin"})
         self.store.save(rec)
+        if not yesterday.is_empty():
+            # 섭취는 섭취한 날의 것이다. 어제 레코드에 'checkin' 표식을
+            # 붙이지 않으므로 연속 체크인 계산도 흔들리지 않는다.
+            self.store.upsert(yesterday)
         self.store.log_event("checkin", "web", {
             "date": d, "seconds": payload.get("seconds"), "filled": saved,
         })

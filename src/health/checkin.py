@@ -49,6 +49,25 @@ MEASUREMENT_KEYS = {
 def is_measurement(key: str) -> bool:
     return key in MEASUREMENT_KEYS
 
+
+# 아침 체크인이 **어제**에 대해 묻는 항목들.
+#
+#   07:30 에 "마지막 카페인 시각?" 을 물으면 오늘 마실 커피는 아직 마시지도
+#   않았다. 답할 수 있는 건 어제 것뿐이다. 그런데 그걸 오늘 레코드에 넣으면
+#   더 나쁜 일이 생긴다 — 수면은 '기상한 날'에 귀속시키므로, 8/26 16시의
+#   카페인이 영향을 준 수면은 8/27 에 기록된다. 카페인을 8/27 에 저장하면
+#   원인과 결과가 같은 날에 놓여 lag 1 상관분석이 어긋난다.
+#
+#   그래서 이 항목들은 **전날 레코드**에 쓴다. 섭취는 섭취한 날의 것이다.
+YESTERDAY_KEYS = {
+    "intake.last_caffeine_at", "intake.caffeine_mg",
+    "intake.alcohol_units", "intake.last_meal_at", "intake.water_ml",
+}
+
+
+def asks_about_yesterday(key: str) -> bool:
+    return key in YESTERDAY_KEYS
+
 # 웨어러블이 자동으로 채워주는 항목. 이걸 매일 손으로 묻는 것이
 # 체크인이 길어지는 가장 흔한 이유다 — 자동 수집에 맡기고 슬롯을 비운다.
 WEARABLE_COVERED = {
@@ -180,10 +199,13 @@ PROMPTS: dict[str, Prompt] = {
     "vitals.blood_glucose_mgdl": Prompt("vitals.blood_glucose_mgdl", "혈당", "number", "", "mg/dL", float),
     "vitals.spo2_pct":     Prompt("vitals.spo2_pct", "산소포화도", "number", "97", "%", float),
     "activity.steps":      Prompt("activity.steps", "걸음 수", "number", "", "보", int),
-    "intake.caffeine_mg":  Prompt("intake.caffeine_mg", "카페인", "number", "커피 1잔 ≈ 90", "mg", float),
-    "intake.last_caffeine_at": Prompt("intake.last_caffeine_at", "마지막 카페인", "time", "16:30"),
-    "intake.water_ml":     Prompt("intake.water_ml", "물", "number", "", "ml", float),
-    "intake.alcohol_units":Prompt("intake.alcohol_units", "음주", "number", "소주 1잔 ≈ 1", "잔", float),
+    "intake.caffeine_mg":  Prompt("intake.caffeine_mg", "어제 카페인 총량", "number",
+                                  "커피 1잔 ≈ 90", "mg", float),
+    "intake.last_caffeine_at": Prompt("intake.last_caffeine_at", "어제 마지막 카페인", "time",
+                                      "16:30 — 어젯밤 수면에 영향을 준 시각"),
+    "intake.water_ml":     Prompt("intake.water_ml", "어제 물", "number", "1800", "ml", float),
+    "intake.alcohol_units":Prompt("intake.alcohol_units", "어제 음주", "number",
+                                  "소주 1잔 ≈ 1 · 안 마셨으면 0", "잔", float),
 }
 
 # 생리학적 범위. 벗어나면 저장하지 않고 되묻는다 — 오타 하나가
@@ -298,11 +320,17 @@ def _ask(p: Prompt, existing: Any) -> Any:
         return v
 
 
-def run(rec: DailyRecord, tracking: list[str]) -> tuple[DailyRecord, float, int]:
+def run(
+    rec: DailyRecord,
+    tracking: list[str],
+    yesterday: DailyRecord | None = None,
+) -> tuple[DailyRecord, float, int]:
     """체크인을 진행하고 (갱신된 레코드, 소요 초, 새로 채운 항목 수)를 반환.
 
     이미 값이 있는 항목은 묻지 않는다 — 웨어러블이 아침에 넣은 수면을
     저녁에 또 물으면 그게 마찰이다.
+
+    yesterday 를 주면 YESTERDAY_KEYS 항목이 그쪽에 저장된다.
     """
     started = time.monotonic()
     asked = filled = 0
@@ -312,12 +340,13 @@ def run(rec: DailyRecord, tracking: list[str]) -> tuple[DailyRecord, float, int]
         if p is None:
             print(f"  (알 수 없는 항목 '{path}' — 건너뜀)")
             continue
-        if all(rec.get_path(t) is not None for t in p.targets):
+        target_rec = yesterday if (yesterday and asks_about_yesterday(path)) else rec
+        if all(target_rec.get_path(t) is not None for t in p.targets):
             continue                          # 이미 채워짐 — 다시 묻는 것이 곧 마찰이다
         asked += 1
         v = _ask(p, None)
         if v is not None:
-            p.apply(rec, v)
+            p.apply(target_rec, v)
             filled += 1
 
     if asked == 0:

@@ -246,8 +246,10 @@ def cmd_checkin(args, store: Store) -> int:
         print("⚠ 프로필이 아직 검토되지 않았습니다. 안전 경계 없이 조언이 나갑니다.")
         print(f"  먼저: {cmd_name()} init --interactive\n")
 
+    yesterday_date = (date.fromisoformat(d) - timedelta(days=1)).isoformat()
+    yesterday = store.load_or_new(yesterday_date)
     try:
-        rec, seconds, filled = ck.run(rec, profile.tracked())
+        rec, seconds, filled = ck.run(rec, profile.tracked(), yesterday)
     except ck.Aborted:
         print("\n중단했습니다. 여기까지는 저장되지 않았습니다.")
         return 130
@@ -257,6 +259,9 @@ def cmd_checkin(args, store: Store) -> int:
 
     rec.sources = sorted(set(rec.sources) | {"checkin"})
     store.save(rec)
+    if not yesterday.is_empty():
+        # 섭취는 섭취한 날의 것이다. 어제 레코드는 '체크인한 날'로 세지 않는다.
+        store.upsert(yesterday)
     store.log_event("checkin", "cli", {"date": d, "seconds": seconds, "filled": filled})
 
     print(f"\n저장 ({seconds:.0f}초, {filled}개 기록)")

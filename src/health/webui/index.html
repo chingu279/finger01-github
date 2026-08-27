@@ -253,16 +253,17 @@ async function loadForm() {
             ${m.filled ? `<span class="was">오늘 ${esc(m.current)}</span>` : ""}</label>
           <input id="m-${esc(m.key)}" type="text" data-key="${esc(m.key)}"
             inputmode="decimal" autocomplete="off"
-            placeholder="${esc(m.hint || "")}" value="${m.filled ? esc(m.current) : ""}">
+            placeholder="${esc((m.hint || "").split("·")[0].trim())}"
+            value="${m.filled ? esc(m.current) : ""}">
         </div>`).join("") + `</div>
       <div class="note">잰 것만 적으세요. 이미 적은 값도 다시 재면 고칠 수 있습니다.</div>
       </div>`;
   }
 
-  if (!ask.length) {
-    html += `<div class="card"><div class="empty">오늘 물을 질문이 모두 채워졌습니다.</div></div>`;
-  } else
-  html += `<div class="card">` + ask.map(f => {
+  const past = ask.filter(f => f.about === "yesterday");
+  const now = ask.filter(f => f.about !== "yesterday");
+
+  const fieldHtml = f => {
     const hint = f.hint ? `<span class="hint">${esc(f.hint)}</span>` : "";
     const unit = f.unit ? `<span class="unit">${esc(f.unit)}</span>` : "";
     let control;
@@ -277,13 +278,23 @@ async function loadForm() {
         placeholder="증상이 있으면 본인 표현 그대로 적어주세요"></textarea>`;
     } else {
       const mode = f.kind === "time" ? "text" : "text";
+      const example = (f.hint || "").split("—")[0].split("·")[0].trim();
       control = `<input type="${mode}" data-key="${esc(f.key)}" inputmode="decimal"
-        placeholder="${esc(f.hint || "")}" autocomplete="off">`;
+        placeholder="${esc(example)}" autocomplete="off">`;
     }
     return `<div class="field"><div class="top"><span class="name">${esc(f.label)}</span>
       ${unit}${hint}</div>${control}</div>`;
-  }).join("") + `</div>
-  <div class="note">Enter 를 누를 필요가 없습니다. 값을 고르거나 적고 아래 버튼만 누르세요.
+  };
+
+  if (now.length) html += `<div class="card">` + now.map(fieldHtml).join("") + `</div>`;
+  if (past.length) html += `<div class="card"><h2>어제</h2>` +
+    past.map(fieldHtml).join("") +
+    `<div class="note">${esc(d.yesterday)} 기록으로 저장됩니다. 섭취는 섭취한 날의
+     것이라야 어젯밤 수면과 맞물립니다.</div></div>`;
+  if (!ask.length) html += `<div class="card"><div class="empty">
+    오늘 물을 질문이 모두 채워졌습니다.</div></div>`;
+
+  html += `<div class="note">Enter 를 누를 필요가 없습니다. 값을 고르거나 적고 아래 버튼만 누르세요.
   빈 칸은 그대로 두셔도 됩니다 — 기록하지 않은 것과 0은 다르게 취급됩니다.</div>`;
 
   $("#form").innerHTML = html;

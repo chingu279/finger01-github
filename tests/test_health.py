@@ -1372,3 +1372,93 @@ def test_ui_file_ships_with_the_package():
     from health import web
 
     assert (web.UI_DIR / "index.html").exists()
+
+
+# ── 아침 체크인이 '어제'에 대해 묻는 항목 ───────────────────────
+
+def test_intake_is_attributed_to_the_day_it_was_consumed(tmp_path):
+    """8/27 아침에 "어제 16시"라고 답하면 8/26 의 섭취여야 한다.
+
+    수면은 '기상한 날'에 귀속시키므로, 카페인을 8/27 에 저장하면 원인과
+    결과가 같은 날에 놓여 lag 1 상관분석이 어긋난다. 카페인-수면 실험이
+    이 시스템의 1순위 실험이라 이 하루가 그대로 결론을 뒤집는다.
+    """
+    from health import checkin as ck
+
+    st = Store(tmp_path)
+    today = DailyRecord(date="2026-08-27")
+    yesterday = DailyRecord(date="2026-08-26")
+
+    ck.PROMPTS["intake.last_caffeine_at"].apply(
+        yesterday if ck.asks_about_yesterday("intake.last_caffeine_at") else today, "16:00")
+    st.upsert(today); st.upsert(yesterday)
+
+    assert st.load("2026-08-26").intake.last_caffeine_at == "16:00"
+    assert st.load("2026-08-27") is None or \
+           st.load("2026-08-27").intake.last_caffeine_at is None
+
+
+def test_yesterday_keys_cover_intake_not_subjective():
+    """활력은 지금 답하는 것이고 섭취는 어제 것이다."""
+    from health import checkin as ck
+
+    assert ck.asks_about_yesterday("intake.last_caffeine_at")
+    assert ck.asks_about_yesterday("intake.alcohol_units")
+    assert not ck.asks_about_yesterday("subjective.energy")
+    assert not ck.asks_about_yesterday("vitals.bp")
+
+
+def test_yesterday_prompts_say_yesterday():
+    """아침 7시에 '마지막 카페인 시각?' 은 답할 수 없는 질문이다.
+    라벨이 어느 날을 묻는지 말해야 한다."""
+    from health import checkin as ck
+
+    for key in ck.YESTERDAY_KEYS:
+        p = ck.PROMPTS.get(key)
+        if p:
+            assert "어제" in p.label, f"{key}: {p.label}"
+
+
+def test_web_saves_intake_to_yesterday(server):
+    from datetime import date as _date, timedelta as _td
+
+    server.store.save_profile(Profile(
+        reviewed_at="2026-01-01T07:00:00+09:00",
+        tracking=["subjective.energy", "intake.last_caffeine_at"]))
+
+    res = server.post("/api/checkin", {
+        "values": {"subjective.energy": "4", "intake.last_caffeine_at": "16:00"}})
+    assert res["saved"] == 2
+
+    today = _date.today().isoformat()
+    y = (_date.today() - _td(days=1)).isoformat()
+    assert server.store.load(today).subjective.energy == 4
+    assert server.store.load(y).intake.last_caffeine_at == "16:00"
+    assert server.store.load(today).intake.last_caffeine_at is None
+
+
+def test_yesterday_record_does_not_count_as_a_checkin_day(server):
+    """어제 레코드에 섭취를 채웠다고 연속 체크인이 늘어나면
+    Phase 0 게이트가 거짓으로 통과한다."""
+    from datetime import date as _date, timedelta as _td
+
+    server.store.save_profile(Profile(
+        reviewed_at="2026-01-01T07:00:00+09:00",
+        tracking=["intake.last_caffeine_at"]))
+    server.post("/api/checkin", {"values": {"intake.last_caffeine_at": "16:00"}})
+
+    y = (_date.today() - _td(days=1)).isoformat()
+    rec = server.store.load(y)
+    assert rec.intake.last_caffeine_at == "16:00"
+    assert "checkin" not in rec.sources
+
+
+def test_web_marks_which_day_a_field_is_about(server):
+    server.store.save_profile(Profile(
+        reviewed_at="2026-01-01T07:00:00+09:00",
+        tracking=["subjective.energy", "intake.last_caffeine_at"]))
+    d = server.get("/api/today")
+    about = {f["key"]: f["about"] for f in d["fields"]}
+    assert about["subjective.energy"] == "today"
+    assert about["intake.last_caffeine_at"] == "yesterday"
+    assert d["yesterday"] < d["date"]
