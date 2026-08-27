@@ -29,7 +29,25 @@ DEFAULT_TRACKING = [
     "subjective.note",
 ]
 
-MAX_TRACKING = 5
+MAX_TRACKING = 5      # '질문' 항목의 상한. 측정값은 여기 안 센다(아래 참고).
+
+# 기기 계기판을 읽어 옮겨 적는 항목들.
+#
+#   5개 상한은 "매일 3개 넘게 물으면 그만둔다"는 근거로 만들었는데,
+#   그건 **생각해야 답이 나오는 질문**에 대한 이야기다. 활력 1~5 는 자기
+#   상태를 돌아봐야 하지만, 혈압 127/77 은 화면에 떠 있는 숫자를 옮기는
+#   일이다. 둘을 같은 상한에 묶으면 이미 측정해 둔 값을 버리게 된다.
+#
+#   그래서 측정값은 상한에서 빼고, 웹 화면에서도 질문과 분리해 보여준다.
+MEASUREMENT_KEYS = {
+    "vitals.bp", "vitals.bp_systolic", "vitals.bp_diastolic",
+    "vitals.weight_kg", "vitals.body_temp_c", "vitals.blood_glucose_mgdl",
+    "vitals.spo2_pct", "vitals.resting_hr", "vitals.hrv_rmssd_ms",
+}
+
+
+def is_measurement(key: str) -> bool:
+    return key in MEASUREMENT_KEYS
 
 # 웨어러블이 자동으로 채워주는 항목. 이걸 매일 손으로 묻는 것이
 # 체크인이 길어지는 가장 흔한 이유다 — 자동 수집에 맡기고 슬롯을 비운다.
@@ -78,10 +96,14 @@ def suggest_tracking(goals: list[str], has_wearable: bool) -> list[str]:
         # 통째로 사라져 준비도를 영영 계산할 수 없다 — 기본 세트로 돌아간다.
         return list(DEFAULT_TRACKING)
 
-    picked = picked[: MAX_TRACKING - 1]        # 마지막 한 자리는 자유 서술 몫
-    if "subjective.note" not in picked:
-        picked.append("subjective.note")
-    return picked
+    # 측정값은 상한에서 빼고 뒤로 보낸다 — 질문 자리를 잡아먹지 않는다.
+    measures = [p for p in picked if is_measurement(p)]
+    questions = [p for p in picked if not is_measurement(p)]
+
+    questions = questions[: MAX_TRACKING - 1]  # 마지막 한 자리는 자유 서술 몫
+    if "subjective.note" not in questions:
+        questions.append("subjective.note")
+    return questions + measures
 
 
 @dataclass
@@ -149,14 +171,14 @@ PROMPTS: dict[str, Prompt] = {
     "sleep.waketime":      Prompt("sleep.waketime", "기상", "time", "07:05"),
     "sleep.efficiency_pct":Prompt("sleep.efficiency_pct", "수면 효율", "number", "", "%", float),
     "sleep.latency_min":   Prompt("sleep.latency_min", "입면 지연", "number", "눕고 잠들기까지", "분", float),
-    "vitals.resting_hr":   Prompt("vitals.resting_hr", "안정시 심박", "number", "기상 직후", "bpm", float),
+    "vitals.resting_hr":   Prompt("vitals.resting_hr", "안정시 심박", "number", "기상 직후 · 57", "bpm", float),
     "vitals.hrv_rmssd_ms": Prompt("vitals.hrv_rmssd_ms", "HRV", "number", "rMSSD", "ms", float),
-    "vitals.weight_kg":    Prompt("vitals.weight_kg", "체중", "number", "", "kg", float),
+    "vitals.weight_kg":    Prompt("vitals.weight_kg", "체중", "number", "61.1", "kg", float),
     "vitals.bp_systolic":  Prompt("vitals.bp_systolic", "수축기 혈압", "number", "", "mmHg", float),
     "vitals.bp_diastolic": Prompt("vitals.bp_diastolic", "이완기 혈압", "number", "", "mmHg", float),
-    "vitals.body_temp_c":  Prompt("vitals.body_temp_c", "체온", "number", "", "℃", float),
+    "vitals.body_temp_c":  Prompt("vitals.body_temp_c", "체온", "number", "36.5", "℃", float),
     "vitals.blood_glucose_mgdl": Prompt("vitals.blood_glucose_mgdl", "혈당", "number", "", "mg/dL", float),
-    "vitals.spo2_pct":     Prompt("vitals.spo2_pct", "산소포화도", "number", "", "%", float),
+    "vitals.spo2_pct":     Prompt("vitals.spo2_pct", "산소포화도", "number", "97", "%", float),
     "activity.steps":      Prompt("activity.steps", "걸음 수", "number", "", "보", int),
     "intake.caffeine_mg":  Prompt("intake.caffeine_mg", "카페인", "number", "커피 1잔 ≈ 90", "mg", float),
     "intake.last_caffeine_at": Prompt("intake.last_caffeine_at", "마지막 카페인", "time", "16:30"),

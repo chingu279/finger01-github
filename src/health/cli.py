@@ -309,6 +309,8 @@ def cmd_status(args, store: Store) -> int:
     median = sorted(times)[len(times) // 2] if times else None
 
     tracked = profile.tracked()
+    questions = profile.questions()
+    measures = profile.measurements()
     checks: list[tuple[bool | None, str, str]] = [
         (
             bool(profile.reviewed_at),
@@ -317,9 +319,11 @@ def cmd_status(args, store: Store) -> int:
             else f"미검토 — {cmd_name()} init --interactive",
         ),
         (
-            len(tracked) <= 5,
-            f"측정 항목 {len(tracked)}개",
-            "5개 이하" if len(tracked) <= 5 else "5개를 넘으면 2주 안에 끊깁니다",
+            len(questions) <= ck.MAX_TRACKING,
+            f"질문 {len(questions)}개" + (f" (+측정값 {len(measures)})" if measures else ""),
+            f"{ck.MAX_TRACKING}개 이하"
+            if len(questions) <= ck.MAX_TRACKING
+            else f"{ck.MAX_TRACKING}개를 넘으면 2주 안에 끊깁니다",
         ),
         (
             streak >= 7,

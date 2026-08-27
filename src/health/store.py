@@ -63,6 +63,18 @@ class Profile:
 
         return list(self.tracking) if self.tracking else list(DEFAULT_TRACKING)
 
+    def questions(self) -> list[str]:
+        """생각해야 답이 나오는 항목. Phase 0 게이트의 상한은 이것만 센다."""
+        from .checkin import is_measurement
+
+        return [k for k in self.tracked() if not is_measurement(k)]
+
+    def measurements(self) -> list[str]:
+        """기기 계기판을 옮겨 적는 항목. 매일 안 재도 되고, 상한에 안 센다."""
+        from .checkin import is_measurement
+
+        return [k for k in self.tracked() if is_measurement(k)]
+
     @property
     def age(self) -> int | None:
         if self.birth_year is None:

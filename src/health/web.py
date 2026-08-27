@@ -114,7 +114,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         profile = self.store.load_profile()
         rec = self.store.load_or_new(d)
 
-        fields = []
+        fields, measurements = [], []
         for key in profile.tracked():
             p = ck.PROMPTS.get(key)
             if p is None:
@@ -128,17 +128,21 @@ class HealthHandler(BaseHTTPRequestHandler):
             # 프롬프트 힌트는 CLI 와 공유한다. "(Enter=건너뜀)" 같은 터미널
             # 전용 문구는 웹에서 거짓말이 되므로 걷어낸다.
             hint = p.hint.replace("(Enter=건너뜀)", "").strip()
-            fields.append({
+            item = {
                 "key": key, "label": p.label, "kind": p.kind,
                 "hint": hint, "unit": p.unit,
                 "filled": filled, "current": current,
-            })
+            }
+            # 측정값은 이미 채워져 있어도 화면에 남겨둔다 — 다시 잰 값으로
+            # 고칠 수 있어야 하기 때문. 질문은 채워졌으면 다시 묻지 않는다.
+            (measurements if ck.is_measurement(key) else fields).append(item)
 
         # 웨어러블이 이미 채워준 것 — 다시 묻지 않지만 보여는 준다
         auto = []
+        tracked_targets = {t for k in profile.tracked()
+                           for t in ck.PROMPTS.get(k, ck.Prompt(k, "", "")).targets}
         for path, label, _, _ in bl.TRACKED:
-            if path in {t for k in profile.tracked()
-                        for t in ck.PROMPTS.get(k, ck.Prompt(k, "", "")).targets}:
+            if path in tracked_targets:
                 continue
             v = rec.get_path(path)
             if v is not None:
@@ -147,6 +151,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         return {
             "date": d,
             "fields": fields,
+            "measurements": measurements,
             "auto": auto,
             "sources": rec.sources,
             "profile_reviewed": bool(profile.reviewed_at),

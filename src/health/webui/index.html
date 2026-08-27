@@ -79,6 +79,11 @@ input[type=text],input[type=number],textarea{
 input:focus,textarea:focus{outline:2px solid var(--series);outline-offset:-1px;border-color:var(--series)}
 textarea{min-height:88px;resize:vertical}
 .unit{font-size:.8rem;color:var(--muted);font-family:var(--mono)}
+.measures{display:grid;gap:12px}
+@media(min-width:560px){.measures{grid-template-columns:1fr 1fr}}
+.measure{display:grid;gap:6px}
+.measure label{font-weight:600;font-size:.92rem;display:flex;gap:7px;align-items:baseline}
+.measure .was{margin-left:auto;font-size:.74rem;color:var(--muted);font-family:var(--mono)}
 
 .save{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));
       background:linear-gradient(transparent,var(--plane) 22%)}
@@ -239,13 +244,24 @@ async function loadForm() {
     </tbody></table>
     <div class="note">웨어러블에서 자동으로 채워진 항목입니다. 다시 묻지 않습니다.</div></div>`;
 
-  if (!ask.length) {
-    html += `<div class="card"><div class="empty">오늘 물을 항목이 모두 채워졌습니다.</div></div>`;
-    $("#form").innerHTML = html;
-    $("#savebar").hidden = true;
-    return;
+  if (d.measurements && d.measurements.length) {
+    html += `<div class="card"><h2>측정값</h2>
+      <div class="measures">` + d.measurements.map(m => `
+        <div class="measure">
+          <label for="m-${esc(m.key)}">${esc(m.label)}
+            <span class="unit">${esc(m.unit || "")}</span>
+            ${m.filled ? `<span class="was">오늘 ${esc(m.current)}</span>` : ""}</label>
+          <input id="m-${esc(m.key)}" type="text" data-key="${esc(m.key)}"
+            inputmode="decimal" autocomplete="off"
+            placeholder="${esc(m.hint || "")}" value="${m.filled ? esc(m.current) : ""}">
+        </div>`).join("") + `</div>
+      <div class="note">잰 것만 적으세요. 이미 적은 값도 다시 재면 고칠 수 있습니다.</div>
+      </div>`;
   }
 
+  if (!ask.length) {
+    html += `<div class="card"><div class="empty">오늘 물을 질문이 모두 채워졌습니다.</div></div>`;
+  } else
   html += `<div class="card">` + ask.map(f => {
     const hint = f.hint ? `<span class="hint">${esc(f.hint)}</span>` : "";
     const unit = f.unit ? `<span class="unit">${esc(f.unit)}</span>` : "";
@@ -271,7 +287,8 @@ async function loadForm() {
   빈 칸은 그대로 두셔도 됩니다 — 기록하지 않은 것과 0은 다르게 취급됩니다.</div>`;
 
   $("#form").innerHTML = html;
-  $("#savebar").hidden = false;
+  $("#savebar").hidden = !(ask.length || (d.measurements || []).length);
+  $("#save").textContent = ask.length ? "저장하고 결과 보기" : "측정값 저장";
   started = Date.now();
 
   $("#form").querySelectorAll(".scale").forEach(g => {

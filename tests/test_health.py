@@ -393,11 +393,37 @@ def test_wearable_owners_are_not_asked_for_auto_collected_metrics():
     assert "sleep.total_min" in without
 
 
-def test_suggestion_respects_the_five_item_cap():
-    from health.checkin import MAX_TRACKING, GOAL_PRESETS, suggest_tracking
+def test_suggestion_respects_the_question_cap():
+    """상한은 '생각해야 답이 나오는 질문'에만 건다. 계기판을 옮겨 적는
+    측정값까지 묶으면 이미 재둔 값을 버리게 된다."""
+    from health.checkin import MAX_TRACKING, GOAL_PRESETS, is_measurement, suggest_tracking
 
     picked = suggest_tracking(list(GOAL_PRESETS), has_wearable=False)
-    assert len(picked) <= MAX_TRACKING
+    questions = [p for p in picked if not is_measurement(p)]
+    assert len(questions) <= MAX_TRACKING
+
+
+def test_measurements_do_not_consume_question_slots():
+    from health.checkin import suggest_tracking
+
+    p = Profile(tracking=suggest_tracking(["sleep", "fitness", "bp", "weight"], True))
+    assert set(p.measurements()) == {"vitals.bp", "vitals.weight_kg"}
+    assert "subjective.note" in p.questions()
+    assert len(p.questions()) <= 5
+
+
+def test_status_cap_counts_questions_only(tmp_path):
+    """혈압·체중을 넣었다고 게이트가 실패하면 안 된다."""
+    from health.cli import build_parser, cmd_status
+
+    st = Store(tmp_path)
+    st.save_profile(Profile(
+        reviewed_at="2026-01-01T07:00:00+09:00",
+        tracking=["subjective.energy", "subjective.soreness", "subjective.note",
+                  "vitals.bp", "vitals.weight_kg", "vitals.body_temp_c"]))
+    p = st.load_profile()
+    assert len(p.tracked()) == 6          # 전체는 6개지만
+    assert len(p.questions()) == 3        # 질문은 3개 → 상한 통과
 
 
 def test_suggestion_always_keeps_the_free_text_line():
@@ -1245,11 +1271,21 @@ def test_server_binds_to_loopback_only():
     assert 'ThreadingHTTPServer(("127.0.0.1"' in src
 
 
-def test_today_lists_only_unfilled_tracked_fields(server):
+def test_today_splits_questions_from_measurements(server):
+    """계기판을 옮겨 적는 값과 자기를 돌아봐야 답하는 질문은
+    마찰이 다르므로 화면에서도 나눠 보여준다."""
     d = server.get("/api/today")
-    keys = [f["key"] for f in d["fields"]]
-    assert keys == ["subjective.energy", "vitals.bp", "subjective.note"]
+    assert [f["key"] for f in d["fields"]] == ["subjective.energy", "subjective.note"]
+    assert [m["key"] for m in d["measurements"]] == ["vitals.bp"]
     assert all(f["filled"] is False for f in d["fields"])
+
+
+def test_measurements_stay_visible_after_being_filled(server):
+    """다시 잰 값으로 고칠 수 있어야 한다. 질문과 달리 숨기지 않는다."""
+    server.post("/api/checkin", {"values": {"vitals.bp": "118/70"}})
+    d = server.get("/api/today")
+    bp = next(m for m in d["measurements"] if m["key"] == "vitals.bp")
+    assert bp["filled"] and bp["current"] == "118/70"
 
 
 def test_cli_only_hint_text_is_stripped_for_web(server):
